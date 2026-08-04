@@ -1,5 +1,9 @@
 # Garena Sahur
 
+## Team Architecture and Ownership
+
+See [Team Architecture and Ownership](docs/team-architecture.md) for the agreed repository structure, named ownership, system architecture, module boundaries, handoff flow, and shared message contracts.
+
 ## System architecture
 
 ```mermaid
