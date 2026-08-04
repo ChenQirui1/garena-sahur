@@ -1,4 +1,6 @@
-# Garena Sahur
+# Spotlight — AI Crowd Director
+
+Built by team **Garena Sahur**.
 
 ## Team Architecture and Ownership
 
