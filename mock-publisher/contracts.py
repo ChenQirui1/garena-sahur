@@ -1,131 +1,211 @@
-"""Shared message contracts for the mock publisher.
+"""Canonical schema-version-1.0 messages emitted by the mock Minecraft publisher.
 
-These builders produce messages that match the agreed structures in
-``docs/team-architecture.md`` §8 — Shared Message Contracts. The mock
-publisher stands in for Ivan's Minecraft / pub-sub client side, so the
-downstream Python backend (ingestion -> router -> orchestration) can be
-run and tested without a live game.
-
-Only the four *upstream* topics are produced here — the ones the backend
-subscribes to:
-
-    npc.profile         (startup / profile change)
-    world.snapshot      (high frequency, latest-value-wins)
-    game.event          (durable, dedup by event_id)
-    conversation.turn   (durable, dedup by turn_id)
-
-The downstream (routing.assignment / behaviour.command / telemetry.record)
-is intentionally *not* produced here — that is what consumes this feed.
+The mock publisher produces the three upstream topics defined in
+``docs/message_schemas.md``. Static NPC profiles are backend-owned data and are not
+published by Minecraft.
 """
 
 from __future__ import annotations
 
-# Transport topic names, kept identical to the architecture diagram.
-TOPIC_PROFILE = "npc.profile"
+SCHEMA_VERSION = "1.0"
+
 TOPIC_SNAPSHOT = "world.snapshot"
 TOPIC_EVENT = "game.event"
 TOPIC_TURN = "conversation.turn"
 
-UPSTREAM_TOPICS = (TOPIC_PROFILE, TOPIC_SNAPSHOT, TOPIC_EVENT, TOPIC_TURN)
+UPSTREAM_TOPICS = (TOPIC_SNAPSHOT, TOPIC_EVENT, TOPIC_TURN)
 
 
-def npc_profile(npc_id, name, role, persona, relationships=None):
-    """npc.profile — persona, role and authored relationships.
-
-    §8 lists this topic but does not pin a full field-level schema; this is
-    the proposed shape (see mock-publisher/README.md). Published once per NPC
-    on startup.
-    """
-    return {
-        "type": "npc_profile",
-        "npc_id": npc_id,
-        "name": name,
-        "role": role,
-        "persona": persona,
-        "relationships": relationships or {},
-    }
-
-
-def world_snapshot(session_id, sequence, timestamp_ms, npcs):
-    """world.snapshot — high-frequency, latest-value-wins.
-
-    ``npcs`` is a list of dicts already shaped by :func:`npc_observation`.
-    """
-    return {
-        "type": "world_snapshot",
-        "session_id": session_id,
-        "sequence": sequence,
-        "timestamp_ms": timestamp_ms,
-        "npcs": npcs,
-    }
+def vector3(x, y, z):
+    return {"x": float(x), "y": float(y), "z": float(z)}
 
 
 def npc_observation(
     npc_id,
-    world_distance,
+    position,
+    world_distance_blocks,
     viewport_center_distance,
-    visible,
+    inside_viewport,
     line_of_sight,
-    event_relevance,
-    interaction_recency,
-    active_conversation,
 ):
-    """A single NPC entry inside a world snapshot."""
+    """One raw, radius-selected Minecraft NPC observation."""
     return {
         "npc_id": npc_id,
-        "world_distance": round(float(world_distance), 3),
+        "position": position,
+        "world_distance_blocks": round(float(world_distance_blocks), 3),
         "viewport_center_distance": round(float(viewport_center_distance), 4),
-        "visible": bool(visible),
+        "inside_viewport": bool(inside_viewport),
         "line_of_sight": bool(line_of_sight),
-        "event_relevance": round(float(event_relevance), 3),
-        "interaction_recency": round(float(interaction_recency), 3),
-        "active_conversation": bool(active_conversation),
     }
 
 
-def game_event(event_id, event_type, summary, participants):
-    """game.event — durable, deduplicated by event_id."""
+def world_snapshot(
+    session_id,
+    world_id,
+    sequence,
+    timestamp_ms,
+    player,
+    active_conversation,
+    npcs,
+    attention_edges=None,
+    entry_radius_blocks=24.0,
+    exit_radius_blocks=28.0,
+):
+    """One batched, latest-value-wins world snapshot."""
     return {
-        "type": "game_event",
+        "schema_version": SCHEMA_VERSION,
+        "message_type": "world_snapshot",
+        "session_id": session_id,
+        "world_id": world_id,
+        "sequence": int(sequence),
+        "timestamp_ms": int(timestamp_ms),
+        "candidate_policy": {
+            "entry_radius_blocks": float(entry_radius_blocks),
+            "exit_radius_blocks": float(exit_radius_blocks),
+        },
+        "player": player,
+        "active_conversation": active_conversation,
+        "candidate_count": len(npcs),
+        "npcs": list(npcs),
+        "attention_edges": list(attention_edges or []),
+    }
+
+
+def game_event(
+    session_id,
+    message_id,
+    event_id,
+    event_revision,
+    timestamp_ms,
+    event_type,
+    status,
+    position,
+    actor_npc_ids=None,
+    target_npc_ids=None,
+    responder_npc_ids=None,
+):
+    """One complete revision of a durable game event."""
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "message_type": "game_event",
+        "session_id": session_id,
+        "message_id": message_id,
         "event_id": event_id,
+        "event_revision": int(event_revision),
+        "timestamp_ms": int(timestamp_ms),
         "event_type": event_type,
-        "summary": summary,
-        "participants": list(participants),
+        "status": status,
+        "position": position,
+        "actor_npc_ids": list(actor_npc_ids or []),
+        "target_npc_ids": list(target_npc_ids or []),
+        "responder_npc_ids": list(responder_npc_ids or []),
     }
 
 
-def conversation_turn(conversation_id, turn_id, npc_id, player_text):
-    """conversation.turn — durable, deduplicated by turn_id."""
+def conversation_turn(
+    session_id,
+    conversation_id,
+    turn_id,
+    turn_index,
+    timestamp_ms,
+    speaker_type,
+    speaker_id,
+    target_npc_id,
+    text,
+):
+    """One durable conversation turn, deduplicated by ``turn_id``."""
     return {
-        "type": "conversation_turn",
+        "schema_version": SCHEMA_VERSION,
+        "message_type": "conversation_turn",
+        "session_id": session_id,
         "conversation_id": conversation_id,
         "turn_id": turn_id,
-        "npc_id": npc_id,
-        "player_text": player_text,
+        "turn_index": int(turn_index),
+        "timestamp_ms": int(timestamp_ms),
+        "speaker_type": speaker_type,
+        "speaker_id": speaker_id,
+        "target_npc_id": target_npc_id,
+        "text": text,
     }
 
 
-# --- lightweight self-check -------------------------------------------------
-
 _REQUIRED = {
-    "npc_profile": {"type", "npc_id", "name", "role", "persona", "relationships"},
-    "world_snapshot": {"type", "session_id", "sequence", "timestamp_ms", "npcs"},
-    "game_event": {"type", "event_id", "event_type", "summary", "participants"},
-    "conversation_turn": {"type", "conversation_id", "turn_id", "npc_id", "player_text"},
+    "world_snapshot": {
+        "schema_version",
+        "message_type",
+        "session_id",
+        "world_id",
+        "sequence",
+        "timestamp_ms",
+        "candidate_policy",
+        "player",
+        "active_conversation",
+        "candidate_count",
+        "npcs",
+        "attention_edges",
+    },
+    "game_event": {
+        "schema_version",
+        "message_type",
+        "session_id",
+        "message_id",
+        "event_id",
+        "event_revision",
+        "timestamp_ms",
+        "event_type",
+        "status",
+        "position",
+        "actor_npc_ids",
+        "target_npc_ids",
+        "responder_npc_ids",
+    },
+    "conversation_turn": {
+        "schema_version",
+        "message_type",
+        "session_id",
+        "conversation_id",
+        "turn_id",
+        "turn_index",
+        "timestamp_ms",
+        "speaker_type",
+        "speaker_id",
+        "target_npc_id",
+        "text",
+    },
 }
 
 
 def validate(message):
-    """Assert a message carries every required field for its ``type``.
-
-    Cheap guard so the publisher never emits a malformed contract; raises
-    ``ValueError`` on the first missing field.
-    """
-    kind = message.get("type")
+    """Reject a malformed mock message before a sink publishes it."""
+    kind = message.get("message_type")
     required = _REQUIRED.get(kind)
     if required is None:
-        raise ValueError(f"unknown message type: {kind!r}")
+        raise ValueError(f"unknown message_type: {kind!r}")
+    if message.get("schema_version") != SCHEMA_VERSION:
+        raise ValueError(f"unsupported schema_version: {message.get('schema_version')!r}")
     missing = required - message.keys()
     if missing:
         raise ValueError(f"{kind} missing fields: {sorted(missing)}")
+    unknown = message.keys() - required
+    if unknown:
+        raise ValueError(f"{kind} has unknown fields: {sorted(unknown)}")
+
+    if kind == "world_snapshot":
+        _validate_world_snapshot(message)
     return message
+
+
+def _validate_world_snapshot(message):
+    npcs = message["npcs"]
+    if message["candidate_count"] != len(npcs):
+        raise ValueError("candidate_count must equal len(npcs)")
+    npc_ids = [npc["npc_id"] for npc in npcs]
+    if len(npc_ids) != len(set(npc_ids)):
+        raise ValueError("npcs must have unique npc_id values")
+
+    conversation = message["active_conversation"]
+    if conversation and conversation["target_npc_id"] not in npc_ids:
+        raise ValueError("active conversation target must be a candidate")
+    for edge in message["attention_edges"]:
+        if edge["source_npc_id"] not in npc_ids or edge["target_npc_id"] not in npc_ids:
+            raise ValueError("attention edge endpoints must be candidates")

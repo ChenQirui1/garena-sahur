@@ -9,3 +9,8 @@ See [Team Architecture and Ownership](docs/team-architecture.md) for the agreed 
 ## System architecture
 
 See [System Architecture](docs/architecture.md) for the full data-flow diagram covering Minecraft, the pub/sub transport, the Python backend, the AI behaviour providers, and the evaluation path.
+
+## Shared contracts
+
+See [Message Schemas](docs/message_schemas.md) for the canonical `1.0` Minecraft, Router,
+behaviour-command, and telemetry contracts.

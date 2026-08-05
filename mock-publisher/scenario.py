@@ -1,18 +1,7 @@
-"""Deterministic 'market theft' demo scenario.
+"""Deterministic market-theft messages using Spotlight's canonical contracts.
 
-Reproduces the worked example used throughout the docs (a thief steals bread,
-the shopkeeper reacts, the player asks which way they ran) and scales the crowd
-up to any NPC count for the 10 / 25 / 50 / 100 benchmark points.
-
-The scenario is a small state machine driven tick-by-tick by the publisher:
-
-    profiles()                       -> npc.profile messages (emit once, startup)
-    snapshot(tick, seq, t_ms)        -> a world.snapshot for this tick
-    scripted(tick, total_ticks)      -> any game.event / conversation.turn due now
-
-All non-time values are derived from a seeded RNG, so a given (npcs, seed)
-always produces identical message content — important for repeatable
-benchmarks. Pin ``--epoch-ms`` as well for a fully byte-identical stream.
+The scenario scales to the 10 / 25 / 50 / 100 benchmark points. A fixed seed and
+``--epoch-ms`` produce a byte-identical stream.
 """
 
 from __future__ import annotations
@@ -22,126 +11,127 @@ import random
 import contracts
 
 SESSION_DEFAULT = "demo-01"
+WORLD_DEFAULT = "minecraft-overworld-market"
 CONVERSATION_ID = "conversation-07"
 EVENT_ID = "market-theft-001"
+PLAYER_ID = "player-uuid"
 
-# Fixed principals; everyone else is a numbered villager in the crowd.
 SHOPKEEPER = "shopkeeper-uuid"
 THIEF = "thief-uuid"
 GUARD = "guard-uuid"
 
+ENTRY_RADIUS_BLOCKS = 24.0
+EXIT_RADIUS_BLOCKS = 28.0
+PLAYER_POSITION = contracts.vector3(105.2, 64.0, -31.8)
+PLAYER_LOOK_DIRECTION = contracts.vector3(1.0, 0.0, 0.0)
+
 
 class MarketTheftScenario:
-    def __init__(self, npcs=10, seed=7, session_id=SESSION_DEFAULT):
+    def __init__(
+        self,
+        npcs=10,
+        seed=7,
+        session_id=SESSION_DEFAULT,
+        world_id=WORLD_DEFAULT,
+    ):
         if npcs < 2:
             raise ValueError("scenario needs at least 2 NPCs (shopkeeper + thief)")
         self.session_id = session_id
+        self.world_id = world_id
         self.rng = random.Random(seed)
         self.roster = self._build_roster(npcs)
+        self._candidate_ids = {npc["npc_id"] for npc in self.roster}
 
-        # Scenario state, flipped by scripted() as the story advances.
         self.theft_fired = False
         self.conversation_active = False
-        self._turns_emitted = 0
-
-    # -- roster --------------------------------------------------------------
 
     def _build_roster(self, npcs):
         roster = [
-            {"npc_id": SHOPKEEPER, "name": "Marta", "role": "shopkeeper"},
-            {"npc_id": THIEF, "name": "Rennick", "role": "thief"},
+            {"npc_id": SHOPKEEPER, "base_world": 3.4, "base_viewport": 0.07},
+            {"npc_id": THIEF, "base_world": 5.0, "base_viewport": 0.30},
         ]
         if npcs >= 3:
-            roster.append({"npc_id": GUARD, "name": "Halvor", "role": "town_guard"})
-        for i in range(len(roster), npcs):
             roster.append(
-                {"npc_id": f"villager-{i:03d}-uuid", "name": f"Villager {i}", "role": "villager"}
+                {"npc_id": GUARD, "base_world": 6.5, "base_viewport": 0.50}
             )
-
-        # Static per-NPC spatial baseline (jittered later per tick).
-        for npc in roster:
-            if npc["npc_id"] == SHOPKEEPER:
-                npc["base_world"], npc["base_viewport"] = 3.4, 0.07
-            elif npc["npc_id"] == THIEF:
-                npc["base_world"], npc["base_viewport"] = 5.0, 0.30
-            elif npc["npc_id"] == GUARD:
-                npc["base_world"], npc["base_viewport"] = 6.5, 0.50
-            else:
-                npc["base_world"] = self.rng.uniform(6.0, 40.0)
-                npc["base_viewport"] = self.rng.uniform(0.35, 1.6)
+        for index in range(len(roster), npcs):
+            roster.append(
+                {
+                    "npc_id": f"villager-{index:03d}-uuid",
+                    "base_world": self.rng.uniform(7.0, 23.0),
+                    "base_viewport": self.rng.uniform(0.15, 0.98),
+                }
+            )
         return roster
 
-    # -- upstream messages ---------------------------------------------------
-
-    def profiles(self):
-        """One npc.profile per NPC, emitted on startup."""
-        personas = {
-            "shopkeeper": "Proud market baker; sharp-eyed and quick to raise the alarm.",
-            "thief": "Desperate and fast; avoids eye contact and bolts when noticed.",
-            "town_guard": "Dutiful and literal; responds to reported crimes near the square.",
-            "villager": "Ordinary townsfolk going about the market day.",
-        }
-        relationships = {
-            SHOPKEEPER: {"knows": [GUARD], "wary_of": [THIEF]},
-            GUARD: {"protects": [SHOPKEEPER]},
-        }
-        for npc in self.roster:
-            yield contracts.npc_profile(
-                npc_id=npc["npc_id"],
-                name=npc["name"],
-                role=npc["role"],
-                persona=personas.get(npc["role"], personas["villager"]),
-                relationships=relationships.get(npc["npc_id"], {}),
-            )
-
     def snapshot(self, tick, sequence, timestamp_ms):
-        """Build one world.snapshot reflecting the current scenario state."""
-        observations = []
+        """Build one radius-selected, batched ``world_snapshot``."""
+        measured = []
         for npc in self.roster:
-            npc_id = npc["npc_id"]
             jitter = self.rng.uniform(-0.15, 0.15)
+            world_distance = max(0.5, npc["base_world"] + jitter)
+            if npc["npc_id"] == THIEF and self.theft_fired:
+                world_distance += tick * 0.25
 
-            world = max(0.5, npc["base_world"] + jitter)
-            viewport = max(0.01, npc["base_viewport"] + jitter * 0.05)
+            currently_selected = npc["npc_id"] in self._candidate_ids
+            limit = EXIT_RADIUS_BLOCKS if currently_selected else ENTRY_RADIUS_BLOCKS
+            if world_distance <= limit:
+                self._candidate_ids.add(npc["npc_id"])
+            else:
+                self._candidate_ids.discard(npc["npc_id"])
 
-            # The thief runs away once the theft fires.
-            if npc_id == THIEF and self.theft_fired:
-                world += tick * 0.25
+            viewport_distance = min(
+                1.0, max(0.0, npc["base_viewport"] + jitter * 0.05)
+            )
+            measured.append((npc, world_distance, viewport_distance))
 
-            visible = world < 30.0
-            line_of_sight = visible and viewport < 1.2
-
-            event_relevance = 0.0
-            if self.theft_fired and npc_id in (SHOPKEEPER, THIEF):
-                event_relevance = 1.0
-            elif self.theft_fired and npc_id == GUARD:
-                event_relevance = 0.6
-
-            active = self.conversation_active and npc_id == SHOPKEEPER
-            interaction_recency = 0.8 if active else max(0.0, 0.4 - tick * 0.01)
-
+        observations = []
+        for npc, world_distance, viewport_distance in measured:
+            if npc["npc_id"] not in self._candidate_ids:
+                continue
+            inside_viewport = viewport_distance < 0.90
+            line_of_sight = inside_viewport and world_distance < EXIT_RADIUS_BLOCKS
             observations.append(
                 contracts.npc_observation(
-                    npc_id=npc_id,
-                    world_distance=world,
-                    viewport_center_distance=viewport,
-                    visible=visible,
+                    npc_id=npc["npc_id"],
+                    position=contracts.vector3(
+                        PLAYER_POSITION["x"] + world_distance,
+                        PLAYER_POSITION["y"],
+                        PLAYER_POSITION["z"],
+                    ),
+                    world_distance_blocks=world_distance,
+                    viewport_center_distance=viewport_distance,
+                    inside_viewport=inside_viewport,
                     line_of_sight=line_of_sight,
-                    event_relevance=event_relevance,
-                    interaction_recency=interaction_recency,
-                    active_conversation=active,
                 )
             )
+
+        active_conversation = None
+        if self.conversation_active and SHOPKEEPER in self._candidate_ids:
+            active_conversation = {
+                "conversation_id": CONVERSATION_ID,
+                "target_npc_id": SHOPKEEPER,
+            }
+
         return contracts.world_snapshot(
-            self.session_id, sequence, timestamp_ms, observations
+            session_id=self.session_id,
+            world_id=self.world_id,
+            sequence=sequence,
+            timestamp_ms=timestamp_ms,
+            player={
+                "player_id": PLAYER_ID,
+                "position": PLAYER_POSITION,
+                "look_direction": PLAYER_LOOK_DIRECTION,
+            },
+            active_conversation=active_conversation,
+            npcs=observations,
+            attention_edges=[],
+            entry_radius_blocks=ENTRY_RADIUS_BLOCKS,
+            exit_radius_blocks=EXIT_RADIUS_BLOCKS,
         )
 
-    def scripted(self, tick, total_ticks):
-        """Yield any durable game.event / conversation.turn due at this tick.
-
-        Timings are fractions of the run so the story stays coherent at any
-        duration: theft at ~30%, then two conversation turns.
-        """
+    def scripted(self, tick, total_ticks, timestamp_ms):
+        """Yield durable event and conversation messages due at this tick."""
         theft_at = max(1, int(total_ticks * 0.30))
         turn_one_at = max(2, int(total_ticks * 0.42))
         turn_two_at = max(3, int(total_ticks * 0.58))
@@ -149,27 +139,42 @@ class MarketTheftScenario:
         if tick == theft_at and not self.theft_fired:
             self.theft_fired = True
             yield contracts.TOPIC_EVENT, contracts.game_event(
+                session_id=self.session_id,
+                message_id="event-message-001",
                 event_id=EVENT_ID,
+                event_revision=1,
+                timestamp_ms=timestamp_ms,
                 event_type="market_theft",
-                summary="A thief stole bread from the market stall.",
-                participants=[THIEF, SHOPKEEPER],
+                status="started",
+                position=contracts.vector3(104.2, 64.0, -31.8),
+                actor_npc_ids=[THIEF],
+                target_npc_ids=[SHOPKEEPER],
+                responder_npc_ids=[GUARD] if GUARD in self._candidate_ids else [],
             )
 
         if tick == turn_one_at:
             self.conversation_active = True
-            self._turns_emitted += 1
             yield contracts.TOPIC_TURN, contracts.conversation_turn(
+                session_id=self.session_id,
                 conversation_id=CONVERSATION_ID,
                 turn_id="turn-004",
-                npc_id=SHOPKEEPER,
-                player_text="Which direction did the thief run?",
+                turn_index=4,
+                timestamp_ms=timestamp_ms,
+                speaker_type="player",
+                speaker_id=PLAYER_ID,
+                target_npc_id=SHOPKEEPER,
+                text="Which direction did the thief run?",
             )
 
         if tick == turn_two_at:
-            self._turns_emitted += 1
             yield contracts.TOPIC_TURN, contracts.conversation_turn(
+                session_id=self.session_id,
                 conversation_id=CONVERSATION_ID,
                 turn_id="turn-005",
-                npc_id=SHOPKEEPER,
-                player_text="Should I chase him or fetch the guard?",
+                turn_index=5,
+                timestamp_ms=timestamp_ms,
+                speaker_type="player",
+                speaker_id=PLAYER_ID,
+                target_npc_id=SHOPKEEPER,
+                text="Should I chase him or fetch the guard?",
             )

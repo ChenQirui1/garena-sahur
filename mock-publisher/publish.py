@@ -2,8 +2,8 @@
 """Mock upstream publisher for Spotlight.
 
 Stands in for Ivan's Minecraft / pub-sub client and feeds the downstream
-Python backend the four upstream topics it needs (npc.profile, world.snapshot,
-game.event, conversation.turn) for a coherent market-theft scenario.
+Python backend the three canonical upstream topics (world.snapshot, game.event,
+conversation.turn) for a coherent market-theft scenario.
 
 Stdlib only — no broker, no third-party deps.
 
@@ -59,17 +59,13 @@ def run(args):
         counts[topic] += 1
 
     try:
-        # Startup: publish every NPC profile once.
-        for profile in scenario.profiles():
-            emit(contracts.TOPIC_PROFILE, profile)
-
         base_ms = args.epoch_ms if args.epoch_ms is not None else int(time.time() * 1000)
         for tick in range(total_ticks):
             sequence = 1000 + tick
             t_ms = base_ms + int(tick * dt * 1000)
 
             emit(contracts.TOPIC_SNAPSHOT, scenario.snapshot(tick, sequence, t_ms))
-            for topic, message in scenario.scripted(tick, total_ticks):
+            for topic, message in scenario.scripted(tick, total_ticks, t_ms):
                 emit(topic, message)
 
             if not args.no_sleep and tick < total_ticks - 1:

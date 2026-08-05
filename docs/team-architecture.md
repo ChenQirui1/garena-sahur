@@ -290,16 +290,18 @@ spotlight/
 ```mermaid
 flowchart LR
     IVAN_A["Ivan<br/>Minecraft observations<br/>events and conversation turns"]
+    JR_A["Jerome & Richard<br/>Validation, durable state<br/>RoutingSnapshot enrichment"]
     ED_A["Elson & Daniel<br/>Attention scoring<br/>graph propagation<br/>tier assignment"]
-    JR_A["Jerome & Richard<br/>Generation policy<br/>context construction<br/>LLM calls and fallback"]
+    JR_B["Jerome & Richard<br/>Generation policy<br/>context construction<br/>LLM calls and fallback"]
     IVAN_B["Ivan<br/>Apply dialogue, actions<br/>and Ambient behaviour"]
     ED_B["Elson & Daniel<br/>Routing telemetry<br/>costs, dashboard and benchmarks"]
 
-    IVAN_A -->|"world.snapshot<br/>game.event<br/>conversation.turn"| ED_A
-    ED_A -->|"Focused / Reactive / Ambient<br/>scores and reasons"| JR_A
-    JR_A -->|"behaviour.command"| IVAN_B
+    IVAN_A -->|"world.snapshot<br/>game.event<br/>conversation.turn"| JR_A
+    JR_A -->|"direct call with<br/>enriched RoutingSnapshot"| ED_A
+    ED_A -->|"Focused / Reactive / Ambient<br/>scores and reasons"| JR_B
+    JR_B -->|"behaviour.command"| IVAN_B
     ED_A -.->|"routing records"| ED_B
-    JR_A -.->|"tokens, latency, model status"| ED_B
+    JR_B -.->|"tokens, latency, model status"| ED_B
 ```
 
 ---
@@ -316,8 +318,6 @@ flowchart LR
 
         HOOKS["Conversation and Event Hooks<br/>session_id · sequence · event_id · turn_id"]
 
-        PROFILE_SRC["NPC Profile Export<br/>persona · role · authored relationships"]
-
         AMBIENT["Local Ambient Behaviour<br/>idle · look · point · run · cached lines"]
 
         APPLY["Behaviour Command Applier<br/>dialogue · movement · action · animation<br/>reject stale or expired commands"]
@@ -331,8 +331,6 @@ flowchart LR
         EVENT["game.event<br/>Durable<br/>Deduplicate by event_id"]
 
         TURN["conversation.turn<br/>Durable<br/>Deduplicate by turn_id"]
-
-        PROFILE_TOPIC["npc.profile<br/>Startup or profile change"]
 
         ASSIGN["routing.assignment<br/>Tier deltas · scores · reasons"]
 
@@ -351,6 +349,8 @@ flowchart LR
         EVENT_STORE["Event and Conversation Store<br/>Jerome & Richard"]
 
         PROFILE_STORE["NPC Profile Store<br/>Jerome & Richard"]
+
+        ENRICH["RoutingSnapshot Builder<br/>Jerome & Richard"]
 
         ROUTER["Attention Router / Budget Scheduler<br/>Elson & Daniel"]
 
@@ -386,19 +386,17 @@ flowchart LR
     COLLECT --> SNAP
     HOOKS --> EVENT
     HOOKS --> TURN
-    PROFILE_SRC --> PROFILE_TOPIC
 
     SNAP --> INGEST
     EVENT --> INGEST
     TURN --> INGEST
-    PROFILE_TOPIC --> INGEST
 
     INGEST --> STATE
     INGEST --> EVENT_STORE
-    INGEST --> PROFILE_STORE
 
-    STATE --> ROUTER
-    EVENT_STORE --> ROUTER
+    STATE --> ENRICH
+    EVENT_STORE --> ENRICH
+    ENRICH -->|"direct Python call"| ROUTER
     ROUTER --> ASSIGN
     ASSIGN --> AMBIENT
 
@@ -454,8 +452,9 @@ docs/benchmark_methodology.md
 
 Responsibilities:
 
-1. Convert raw Minecraft observations into routing scores.
-2. Calculate viewport, proximity, event and interaction relevance.
+1. Convert the backend-enriched `RoutingSnapshot` into routing scores.
+2. Calculate viewport and proximity contributions, and consume the backend's event-relevance
+   and interaction-recency signals.
 3. Implement one-hop temporary attention-graph propagation.
 4. Assign Focused, Reactive and Ambient tiers.
 5. Enforce hard Focused and Reactive capacity limits.
@@ -471,7 +470,7 @@ Responsibilities:
 Public interface:
 
 ```python
-routing_result = router.route(world_snapshot)
+routing_result = router.route(routing_snapshot)
 ```
 
 The router returns assignments.
@@ -510,14 +509,16 @@ Responsibilities:
 3. Coalesce high-frequency world snapshots so the latest state wins.
 4. Store durable events and conversation turns.
 5. Deduplicate `event_id` and `turn_id`.
-6. Consume routing assignments from Elson and Daniel.
-7. Decide whether a new generation is required.
-8. Avoid generating dialogue simply because another world snapshot arrived.
-9. Construct context using persona, event, world state and recent dialogue.
-10. Route Focused and Reactive requests to their configured providers.
-11. Implement mock mode, timeouts and scripted fallbacks.
-12. Publish fresh, ordered and expiring behaviour commands.
-13. Report tokens, latency, provider status and fallbacks to telemetry.
+6. Derive event relevance and interaction recency.
+7. Build the enriched `RoutingSnapshot` and call the Router directly.
+8. Consume routing assignments from Elson and Daniel.
+9. Decide whether a new generation is required.
+10. Avoid generating dialogue simply because another world snapshot arrived.
+11. Construct context using persona, event, world state and recent dialogue.
+12. Route Focused and Reactive requests to their configured providers.
+13. Implement mock mode, timeouts and scripted fallbacks.
+14. Publish fresh, ordered and expiring behaviour commands.
+15. Report tokens, latency, provider status and fallbacks to telemetry.
 
 Generation should occur only after a meaningful trigger:
 
@@ -567,114 +568,18 @@ Minecraft does not:
 
 ## 8. Shared Message Contracts
 
-The team must agree on these message structures before completing the integrations.
+The complete versioned contracts, examples, types, units, validation rules, and compatibility
+policy live in [Spotlight Message Schemas](message_schemas.md). That document is the canonical
+source; this ownership page intentionally does not duplicate field-level payloads.
 
-### World snapshot
+The three Minecraft-originated MVP messages are:
 
-```json
-{
-  "type": "world_snapshot",
-  "session_id": "demo-01",
-  "sequence": 1842,
-  "timestamp_ms": 1786208500123,
-  "npcs": [
-    {
-      "npc_id": "shopkeeper-uuid",
-      "world_distance": 3.4,
-      "viewport_center_distance": 0.07,
-      "visible": true,
-      "line_of_sight": true,
-      "event_relevance": 1.0,
-      "interaction_recency": 0.8,
-      "active_conversation": false
-    }
-  ]
-}
-```
+1. `world_snapshot` — one batched, radius-selected, latest-value payload.
+2. `game_event` — a durable, revisioned event lifecycle message.
+3. `conversation_turn` — a durable turn deduplicated by `turn_id`.
 
-High-frequency world snapshots use latest-value-wins semantics.
-
-Older positional state may be replaced by newer state.
-
-Receiving a world snapshot does not automatically trigger an LLM request.
-
-### Game event
-
-```json
-{
-  "type": "game_event",
-  "event_id": "market-theft-001",
-  "event_type": "market_theft",
-  "summary": "A thief stole bread from the market stall.",
-  "participants": [
-    "thief-uuid",
-    "shopkeeper-uuid"
-  ]
-}
-```
-
-Game events are durable and deduplicated by `event_id`.
-
-### Conversation turn
-
-```json
-{
-  "type": "conversation_turn",
-  "conversation_id": "conversation-07",
-  "turn_id": "turn-004",
-  "npc_id": "shopkeeper-uuid",
-  "player_text": "Which direction did the thief run?"
-}
-```
-
-Conversation turns are durable and deduplicated by `turn_id`.
-
-A conversation turn should trigger at most one generation request.
-
-### Routing assignment
-
-```json
-{
-  "npc_id": "shopkeeper-uuid",
-  "tier": "focused",
-  "previous_tier": "reactive",
-  "changed": true,
-  "direct_score": 10.91,
-  "propagated_score": 0.0,
-  "final_score": 10.91,
-  "reasons": [
-    "active conversation",
-    "near viewport centre",
-    "direct event participant",
-    "selected within Focused capacity"
-  ]
-}
-```
-
-### Behaviour command
-
-```json
-{
-  "type": "behaviour_command",
-  "command_id": "command-322",
-  "npc_id": "shopkeeper-uuid",
-  "conversation_id": "conversation-07",
-  "turn_id": "turn-004",
-  "event_id": "market-theft-001",
-  "tier": "focused",
-  "dialogue": "Towards the fountain! He was carrying my bread.",
-  "action": "point_towards_fountain",
-  "source_sequence": 1842,
-  "expires_at_ms": 1786208515000
-}
-```
-
-Minecraft applies the command only when:
-
-- The NPC still exists.
-- The command is newer than the last applied command.
-- The related event or conversation is still current.
-- The command has not expired.
+Static NPC profiles are loaded by the backend from `data/npc_profiles.json`. The enriched
+`RoutingSnapshot` is an internal direct-call contract, not another Pub/Sub message.
 
 ---
 
