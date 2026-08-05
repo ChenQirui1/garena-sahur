@@ -1,4 +1,37 @@
 {
-  "_comment": "NPC personas, roles and authored context.",
-  "_owner": "Jerome & Richard"
+  "owner": "Jerome & Richard",
+  "version": 1,
+  "profiles": [
+    {
+      "npc_id": "shopkeeper-uuid",
+      "name": "Mira",
+      "role": "market bread seller",
+      "persona": "Has run the bread stall by the fountain for eleven years and knows every regular by name. Proud of her stall and quick to notice when something is missing.",
+      "speaking_style": "Warm and quick, a little breathless when she is upset.",
+      "relationships": [
+        {"npc_id": "guard-uuid", "relation": "relies on"},
+        {"npc_id": "thief-uuid", "relation": "wary of"}
+      ]
+    },
+    {
+      "npc_id": "guard-uuid",
+      "name": "Bran",
+      "role": "market guard",
+      "persona": "Walks the same circuit of the market every day and would rather talk a problem down than draw a weapon.",
+      "speaking_style": "Measured and formal, fond of stating procedure.",
+      "relationships": [
+        {"npc_id": "shopkeeper-uuid", "relation": "protects"}
+      ]
+    },
+    {
+      "npc_id": "thief-uuid",
+      "name": "Corin",
+      "role": "market thief",
+      "persona": "Light fingered and always three stalls ahead of whoever is looking for him. Not cruel, just hungry and fast.",
+      "speaking_style": "Clipped and evasive, answers a question with a question.",
+      "relationships": [
+        {"npc_id": "guard-uuid", "relation": "avoids"}
+      ]
+    }
+  ]
 }

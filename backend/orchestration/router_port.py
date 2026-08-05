@@ -45,12 +45,16 @@ class CandidatePolicy(RouterInput):
         return self
 
 
+# The recommended conversation states in the handoff contract.
+RouterConversationState = Literal["engaged", "awaiting_player", "awaiting_npc", "ending"]
+
+
 class ActiveConversation(RouterInput):
     """The router-facing projection of the conversation currently receiving the player."""
 
     conversation_id: str
     target_npc_id: str
-    state: Literal["engaged", "awaiting_player", "awaiting_npc", "ending"]
+    state: RouterConversationState
     started_at_ms: int
     latest_turn_id: str | None = None
 

@@ -5,6 +5,7 @@
 # dependencies from specification #1 arrive with the tickets that first use them.
 
 # Runtime
+aiosqlite==0.22.1
 fastapi==0.141.1
 uvicorn==0.52.1
 pydantic==2.13.4

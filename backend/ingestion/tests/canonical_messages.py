@@ -1,9 +1,10 @@
-"""The team-sent world-snapshot payload the owned intake tests are written against.
+"""The team-sent payloads the owned intake tests are written against.
 
 Owner: Jerome & Richard
 
-The literal below is the representative `world.snapshot` the team circulated on 2026-08-05,
-so a rename or a dropped field fails the suite rather than reaching Ivan's publisher.
+The literals below are the representative `world.snapshot` and `conversation.turn` the team
+circulated on 2026-08-05, so a rename or a dropped field fails the suite rather than reaching
+Ivan's publisher.
 """
 
 from __future__ import annotations
@@ -17,7 +18,10 @@ WORLD_ID = "minecraft-overworld-market"
 SHOPKEEPER = "shopkeeper-uuid"
 THIEF = "thief-uuid"
 CONVERSATION_ID = "conversation-07"
+TURN_ID = "turn-004"
+PLAYER_ID = "player-uuid"
 TIMESTAMP_MS = 1_786_208_500_123
+TURN_TIMESTAMP_MS = 1_786_208_500_200
 
 
 def npc(npc_id: str, **overrides: Any) -> dict[str, Any]:
@@ -49,6 +53,22 @@ def world_snapshot(sequence: int = 1842, **overrides: Any) -> dict[str, Any]:
         "candidate_count": 2,
         "npcs": [npc(SHOPKEEPER), npc(THIEF, world_distance_blocks=11.2)],
         "attention_edges": [],
+    } | overrides
+
+
+def conversation_turn(**overrides: Any) -> dict[str, Any]:
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "message_type": "conversation_turn",
+        "session_id": SESSION_ID,
+        "conversation_id": CONVERSATION_ID,
+        "turn_id": TURN_ID,
+        "turn_index": 4,
+        "timestamp_ms": TURN_TIMESTAMP_MS,
+        "speaker_type": "player",
+        "speaker_id": PLAYER_ID,
+        "target_npc_id": SHOPKEEPER,
+        "text": "Which direction did the thief run?",
     } | overrides
 
 

@@ -82,6 +82,24 @@ class RouterHandoff:
         self._idle.clear()
         self._submitted.set()
 
+    def route_now(self, snapshot: RoutingSnapshot) -> RoutingOutcome:
+        """Route immediately for work that cannot proceed without the assignment.
+
+        Snapshot refresh is coalesced on the worker; a conversation turn is not, because the
+        turn's own generation decision needs this snapshot's tiers. Routing stays serialized:
+        the Router call itself never awaits, so this cannot interleave with the worker.
+
+        The same world sequence can therefore be routed twice — once on snapshot arrival and
+        again when a turn changes the conversation projection. The handoff contract lists both
+        as reasons to call the Router, so the enrichment differs even though the sequence does
+        not. Whether a persistent Router treats the repeat as stale is a question for #3.
+        """
+        key = (snapshot.session_id, snapshot.world_id)
+        self._pending.pop(key, None)
+        outcome = self._route(snapshot)
+        self._outcomes[key] = outcome
+        return outcome
+
     def latest_outcome(self, session_id: str, world_id: str) -> RoutingOutcome | None:
         return self._outcomes.get((session_id, world_id))
 

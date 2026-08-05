@@ -27,14 +27,14 @@ class JsonlIntakeError(ValueError):
         self.reason = reason
 
 
-def submit_jsonl(lines: Iterable[str], service: IntakeService) -> list[IntakeResult]:
+async def submit_jsonl(lines: Iterable[str], service: IntakeService) -> list[IntakeResult]:
     """Submit each topic-message record in order, failing fast on the first rejection."""
     results: list[IntakeResult] = []
     for line_number, line in enumerate(lines, start=1):
         if not line.strip():
             continue
         topic, message = _read_record(line_number, line)
-        result = service.submit(topic, message)
+        result = await service.submit(topic, message)
         if result.outcome in REJECTING_OUTCOMES:
             raise JsonlIntakeError(line_number, f"{result.outcome.value}: {result.detail}")
         results.append(result)
@@ -61,12 +61,14 @@ async def _replay(path: Path) -> None:
     from backend.main import build_pipeline
 
     pipeline = build_pipeline(load_settings())
+    await pipeline.store.open()
     await pipeline.handoff.start()
     try:
-        results = submit_jsonl(path.read_text().splitlines(), pipeline.intake)
+        results = await submit_jsonl(path.read_text().splitlines(), pipeline.intake)
         await pipeline.handoff.wait_until_idle()
     finally:
         await pipeline.handoff.stop()
+        await pipeline.store.close()
 
     for outcome in IntakeOutcome:
         submitted = sum(1 for result in results if result.outcome is outcome)
