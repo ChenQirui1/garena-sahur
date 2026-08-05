@@ -143,7 +143,8 @@ async def test_the_router_receives_the_enriched_contract_shape(backend: Backend)
                 "line_of_sight": True,
                 "event_relevance": 0.0,
                 "event_roles": [],
-                "interaction_recency": 0.0,
+                # The player is talking to this NPC, so the interaction is happening now.
+                "interaction_recency": 1.0,
             },
             {
                 "npc_id": THIEF,

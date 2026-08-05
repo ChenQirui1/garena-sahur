@@ -38,6 +38,12 @@ class Settings(BaseSettings):
     # Specification #1: a command is acceptable for 15 seconds from its creation.
     command_lifetime_ms: int = Field(default=15_000, gt=0)
 
+    # Specification #1: witness membership freezes at event start within 12 blocks, and nearby
+    # spans 12 to 24 blocks. Both are configurable because the handoff contract asks for it and
+    # a different scene may need a different scale.
+    witness_radius_blocks: float = Field(default=12.0, ge=0)
+    nearby_radius_blocks: float = Field(default=24.0, ge=0)
+
     # No tokenizer dependency is scoped by any issue, so the token ceilings below are enforced
     # against a deterministic character estimate rather than a real encoder.
     characters_per_token: int = Field(default=4, gt=0)

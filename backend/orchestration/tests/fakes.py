@@ -16,16 +16,25 @@ from backend.orchestration.telemetry_port import ModelCallFact
 
 
 class ManualClock:
-    """A clock that only moves when a test moves it."""
+    """A clock that only moves when a test moves it.
+
+    Both readings advance together, because a test that moves time forward means the scene
+    aged, not that one of the two clocks drifted.
+    """
 
     def __init__(self, now_ms: int = 1_786_208_500_300) -> None:
         self._now_ms = now_ms
+        self._monotonic_ms = 0
 
     def now_ms(self) -> int:
         return self._now_ms
 
+    def monotonic_ms(self) -> int:
+        return self._monotonic_ms
+
     def advance(self, milliseconds: int) -> None:
         self._now_ms += milliseconds
+        self._monotonic_ms += milliseconds
 
 
 class RecordingPublisher:

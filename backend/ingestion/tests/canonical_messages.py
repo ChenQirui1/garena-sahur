@@ -2,9 +2,9 @@
 
 Owner: Jerome & Richard
 
-The literals below are the representative `world.snapshot` and `conversation.turn` the team
-circulated on 2026-08-05, so a rename or a dropped field fails the suite rather than reaching
-Ivan's publisher.
+The literals below are the representative `world.snapshot`, `game.event`, and
+`conversation.turn` the team circulated on 2026-08-05, so a rename or a dropped field fails the
+suite rather than reaching Ivan's publisher.
 """
 
 from __future__ import annotations
@@ -17,11 +17,22 @@ SESSION_ID = "demo-01"
 WORLD_ID = "minecraft-overworld-market"
 SHOPKEEPER = "shopkeeper-uuid"
 THIEF = "thief-uuid"
+GUARD = "guard-uuid"
 CONVERSATION_ID = "conversation-07"
 TURN_ID = "turn-004"
 PLAYER_ID = "player-uuid"
 TIMESTAMP_MS = 1_786_208_500_123
 TURN_TIMESTAMP_MS = 1_786_208_500_200
+EVENT_ID = "market-theft-001"
+EVENT_MESSAGE_ID = "event-message-001"
+EVENT_TIMESTAMP_MS = 1_786_208_495_000
+
+# The event happens at the stall. The default NPC position is ~4.2 blocks from it, so a
+# candidate placed with `npc()` is inside the witness radius unless a test moves it.
+EVENT_POSITION = {"x": 104.2, "y": 64.0, "z": -31.8}
+WITHIN_WITNESS_RADIUS = {"x": 108.1, "y": 64.0, "z": -30.2}
+WITHIN_NEARBY_BAND = {"x": 120.0, "y": 64.0, "z": -31.8}
+BEYOND_NEARBY_BAND = {"x": 140.0, "y": 64.0, "z": -31.8}
 
 
 def npc(npc_id: str, **overrides: Any) -> dict[str, Any]:
@@ -69,6 +80,27 @@ def conversation_turn(**overrides: Any) -> dict[str, Any]:
         "speaker_id": PLAYER_ID,
         "target_npc_id": SHOPKEEPER,
         "text": "Which direction did the thief run?",
+    } | overrides
+
+
+def game_event(revision: int = 1, **overrides: Any) -> dict[str, Any]:
+    """Revision 1 is the §11.2 payload verbatim; later revisions vary only their delivery."""
+    return {
+        "schema_version": SCHEMA_VERSION,
+        "message_type": "game_event",
+        "session_id": SESSION_ID,
+        "message_id": (
+            EVENT_MESSAGE_ID if revision == 1 else f"{EVENT_MESSAGE_ID}-r{revision}"
+        ),
+        "event_id": EVENT_ID,
+        "event_revision": revision,
+        "timestamp_ms": EVENT_TIMESTAMP_MS + (revision - 1),
+        "event_type": "market_theft",
+        "status": "started",
+        "position": dict(EVENT_POSITION),
+        "actor_npc_ids": [THIEF],
+        "target_npc_ids": [SHOPKEEPER],
+        "responder_npc_ids": [GUARD],
     } | overrides
 
 

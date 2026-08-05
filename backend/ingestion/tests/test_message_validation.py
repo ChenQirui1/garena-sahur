@@ -9,10 +9,15 @@ import pytest
 from backend.ingestion.message_validation import (
     MessageValidationError,
     validate_conversation_turn,
+    validate_game_event,
     validate_world_snapshot,
 )
 from backend.ingestion.tests.canonical_messages import (
     CONVERSATION_ID,
+    EVENT_ID,
+    EVENT_MESSAGE_ID,
+    EVENT_TIMESTAMP_MS,
+    GUARD,
     PLAYER_ID,
     SESSION_ID,
     SHOPKEEPER,
@@ -23,6 +28,7 @@ from backend.ingestion.tests.canonical_messages import (
     active_conversation,
     attention_edge,
     conversation_turn,
+    game_event,
     npc,
     world_snapshot,
 )
@@ -236,3 +242,103 @@ def test_a_non_player_speaker_is_stored_but_is_not_a_player_turn() -> None:
 
     assert turn.speaker_type == "npc"
     assert not turn.is_player_turn
+
+
+def test_accepts_the_team_sent_game_event_payload() -> None:
+    event = validate_game_event(game_event())
+
+    assert event.message_type == "game_event"
+    assert event.session_id == SESSION_ID
+    assert event.message_id == EVENT_MESSAGE_ID
+    assert event.event_id == EVENT_ID
+    assert event.event_revision == 1
+    assert event.timestamp_ms == EVENT_TIMESTAMP_MS
+    assert event.event_type == "market_theft"
+    assert event.status == "started"
+    assert event.position.x == 104.2
+    assert event.position.z == -31.8
+    assert event.actor_npc_ids == [THIEF]
+    assert event.target_npc_ids == [SHOPKEEPER]
+    assert event.responder_npc_ids == [GUARD]
+
+
+@pytest.mark.parametrize("status", ["started", "updated", "ended", "cancelled"])
+def test_accepts_every_documented_lifecycle_status(status: str) -> None:
+    event = validate_game_event(game_event(status=status))
+
+    assert event.status == status
+    assert event.is_terminal is (status in {"ended", "cancelled"})
+
+
+@pytest.mark.parametrize(
+    "overrides",
+    [
+        {"schema_version": "2.0"},
+        {"message_type": "game.event"},
+        {"session_id": ""},
+        {"message_id": ""},
+        {"event_id": ""},
+        {"event_type": ""},
+        {"event_revision": 0},
+        {"event_revision": -1},
+        {"event_revision": "1"},
+        {"timestamp_ms": -1},
+        {"position": None},
+        {"actor_npc_ids": "thief-uuid"},
+        {"unexpected": "field"},
+    ],
+)
+def test_rejects_an_event_that_leaves_the_canonical_boundary(
+    overrides: dict[str, Any],
+) -> None:
+    with pytest.raises(MessageValidationError):
+        validate_game_event(game_event(**overrides))
+
+
+@pytest.mark.parametrize(
+    "missing",
+    [
+        "message_id",
+        "event_id",
+        "event_revision",
+        "timestamp_ms",
+        "event_type",
+        "status",
+        "position",
+        "actor_npc_ids",
+        "target_npc_ids",
+        "responder_npc_ids",
+    ],
+)
+def test_rejects_an_event_that_omits_a_documented_field(missing: str) -> None:
+    payload = game_event()
+    del payload[missing]
+
+    with pytest.raises(MessageValidationError):
+        validate_game_event(payload)
+
+
+def test_rejects_a_lifecycle_status_with_no_defined_behaviour() -> None:
+    """Specification #1 fixes the four statuses; an unknown one has no lifecycle rule (#2)."""
+    with pytest.raises(MessageValidationError):
+        validate_game_event(game_event(status="paused"))
+
+
+def test_event_role_membership_and_event_type_stay_open() -> None:
+    """No source bounds the role arrays or the event vocabulary, so neither is invented (#2)."""
+    empty = validate_game_event(
+        game_event(actor_npc_ids=[], target_npc_ids=[], responder_npc_ids=[])
+    )
+    assert empty.actor_npc_ids == []
+
+    both = validate_game_event(game_event(actor_npc_ids=[THIEF], responder_npc_ids=[THIEF]))
+    assert both.actor_npc_ids == both.responder_npc_ids == [THIEF]
+
+    assert validate_game_event(game_event(event_type="lute_recital")).event_type == "lute_recital"
+
+
+def test_an_event_may_reference_an_npc_that_is_not_a_current_candidate() -> None:
+    """The candidate set is a radius selection; an actor may be outside it."""
+    event = validate_game_event(game_event(actor_npc_ids=["stranger-uuid"]))
+
+    assert event.actor_npc_ids == ["stranger-uuid"]

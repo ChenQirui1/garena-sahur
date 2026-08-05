@@ -17,6 +17,7 @@ from backend.context.conversation_history import ConversationHistory
 from backend.context.npc_profiles import NpcProfiles, ProfileDocumentError
 from backend.ingestion import http_intake
 from backend.ingestion.durable_store import DurableStore
+from backend.ingestion.event_store import EventStore
 from backend.ingestion.intake_service import IntakeService
 from backend.ingestion.turn_store import TurnStore
 from backend.ingestion.world_state_store import WorldStateStore
@@ -32,10 +33,13 @@ from backend.orchestration.command_store import CommandStore
 from backend.orchestration.conversation_manager import ConversationManager
 from backend.orchestration.deduplication import GenerationClaims
 from backend.orchestration.development_router import AmbientOnlyRouter
+from backend.orchestration.event_relevance import EventRadii
 from backend.orchestration.generation_coordinator import GenerationCoordinator
+from backend.orchestration.interaction_recency import InteractionRecency
 from backend.orchestration.observations import Observations
 from backend.orchestration.router_handoff import RouterHandoff
 from backend.orchestration.router_port import RouterPort
+from backend.orchestration.routing_snapshot import RoutingSnapshots
 from backend.orchestration.telemetry_port import LoggingTelemetry, TelemetryPort
 
 
@@ -74,17 +78,26 @@ def build_pipeline(settings: Settings, adapters: Adapters = Adapters()) -> Pipel
     clock = adapters.clock or SystemClock()
     store = DurableStore(settings.database_path)
     turns = TurnStore(store)
+    events = EventStore(store)
     commands = CommandStore(store)
     world_state = WorldStateStore()
     conversation = ConversationManager()
     handoff = RouterHandoff(adapters.router or AmbientOnlyRouter())
     observations = Observations()
     provider = MockProvider(settings.characters_per_token)
+    radii = EventRadii(
+        witness_blocks=settings.witness_radius_blocks,
+        nearby_blocks=settings.nearby_radius_blocks,
+    )
+    recency = InteractionRecency(clock)
+    routing_snapshots = RoutingSnapshots(events=events, recency=recency, radii=radii)
 
     generation = GenerationCoordinator(
         world_state=world_state,
+        events=events,
         conversation=conversation,
         handoff=handoff,
+        routing_snapshots=routing_snapshots,
         claims=GenerationClaims(store),
         context=ContextBuilder(
             profiles=profiles,
@@ -107,6 +120,7 @@ def build_pipeline(settings: Settings, adapters: Adapters = Adapters()) -> Pipel
         telemetry=adapters.telemetry or LoggingTelemetry(),
         observations=observations,
         clock=clock,
+        radii=radii,
         command_lifetime_ms=settings.command_lifetime_ms,
     )
 
@@ -114,10 +128,14 @@ def build_pipeline(settings: Settings, adapters: Adapters = Adapters()) -> Pipel
         intake=IntakeService(
             world_state=world_state,
             turns=turns,
+            events=events,
             conversation=conversation,
             handoff=handoff,
             generation=generation,
+            routing_snapshots=routing_snapshots,
+            recency=recency,
             observations=observations,
+            radii=radii,
             max_snapshot_candidates=settings.max_snapshot_candidates,
         ),
         generation=generation,
