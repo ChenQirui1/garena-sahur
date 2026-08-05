@@ -1,6 +1,10 @@
 """The canonical schema-version-1.0 boundary wire messages must satisfy.
 
 Owner: Jerome & Richard
+
+Field names, nesting, and bounds come from the team-sent `world_snapshot` payload and the
+Router handoff contract, never from house style. Where those sources are silent the boundary
+stays open rather than inventing a rule that could reject a legitimate publisher (ADR 0004).
 """
 
 from __future__ import annotations
@@ -14,14 +18,12 @@ SCHEMA_VERSION = "1.0"
 TOPIC_WORLD_SNAPSHOT = "world.snapshot"
 TOPIC_LEGACY_NPC_PROFILE = "npc.profile"
 
-EARLIEST_ACCEPTED_TIMESTAMP_MS = 1_000_000_000_000
-LATEST_ACCEPTED_TIMESTAMP_MS = 4_000_000_000_000
-MAX_WORLD_DISTANCE_BLOCKS = 1_024.0
+# A JSON number, whether the publisher wrote it with a decimal point or not.
+JsonNumber = float | int
 
-Identifier = Annotated[str, StringConstraints(pattern=r"^[A-Za-z0-9][A-Za-z0-9._:\-]{0,127}$")]
-TimestampMs = Annotated[
-    int, Field(ge=EARLIEST_ACCEPTED_TIMESTAMP_MS, le=LATEST_ACCEPTED_TIMESTAMP_MS)
-]
+NonEmptyText = Annotated[str, StringConstraints(min_length=1)]
+NonNegativeNumber = Annotated[JsonNumber, Field(ge=0.0)]
+UnitInterval = Annotated[JsonNumber, Field(ge=0.0, le=1.0)]
 
 
 class MessageValidationError(ValueError):
@@ -32,64 +34,88 @@ class CanonicalModel(BaseModel):
     model_config = ConfigDict(extra="forbid", frozen=True, strict=True)
 
 
-class CandidateObservation(CanonicalModel):
-    """One radius-selected NPC as observed by Minecraft in this snapshot."""
+class Vector3(CanonicalModel):
+    x: JsonNumber
+    y: JsonNumber
+    z: JsonNumber
 
-    npc_id: Identifier
-    world_distance: Annotated[float, Field(ge=0.0, le=MAX_WORLD_DISTANCE_BLOCKS)]
-    viewport_center_distance: Annotated[float, Field(ge=0.0, le=1.0)]
-    visible: bool
-    line_of_sight: bool
+
+class CandidatePolicy(CanonicalModel):
+    """The entry and exit radii Minecraft used to select the candidate set."""
+
+    entry_radius_blocks: NonNegativeNumber
+    exit_radius_blocks: NonNegativeNumber
+
+    @model_validator(mode="after")
+    def check_exit_radius_exceeds_entry(self) -> CandidatePolicy:
+        if self.exit_radius_blocks <= self.entry_radius_blocks:
+            raise ValueError("exit_radius_blocks must be greater than entry_radius_blocks")
+        return self
+
+
+class Player(CanonicalModel):
+    player_id: str
+    position: Vector3
+    look_direction: Vector3
 
 
 class ActiveConversationRef(CanonicalModel):
-    """The one conversation currently receiving direct player interaction."""
+    """Minecraft's reference to the one conversation receiving direct player interaction."""
 
-    conversation_id: Identifier
-    npc_id: Identifier
+    conversation_id: str
+    target_npc_id: str
+
+
+class NpcObservation(CanonicalModel):
+    """One radius-selected NPC as observed by Minecraft in this snapshot."""
+
+    npc_id: NonEmptyText
+    position: Vector3
+    world_distance_blocks: NonNegativeNumber
+    viewport_center_distance: UnitInterval
+    inside_viewport: bool
+    line_of_sight: bool
 
 
 class AttentionEdge(CanonicalModel):
     """A structural attention relation the backend passes through unweighted."""
 
-    source_npc_id: Identifier
-    target_npc_id: Identifier
-    relation: Identifier
+    source_npc_id: str
+    target_npc_id: str
+    kind: NonEmptyText
+    active: bool
 
 
 class WorldSnapshot(CanonicalModel):
     """An ordered latest-value observation of the visible game state."""
 
     schema_version: Literal["1.0"]
-    type: Literal["world_snapshot"]
-    session_id: Identifier
-    world_id: Identifier
-    sequence: Annotated[int, Field(ge=1)]
-    observed_at_ms: TimestampMs
-    candidates: Annotated[list[CandidateObservation], Field(min_length=1)]
+    message_type: Literal["world_snapshot"]
+    session_id: str
+    world_id: str
+    sequence: Annotated[int, Field(ge=0)]
+    timestamp_ms: Annotated[int, Field(ge=0)]
+    candidate_policy: CandidatePolicy
+    player: Player
     active_conversation: ActiveConversationRef | None = None
+    candidate_count: Annotated[int, Field(ge=0)]
+    npcs: list[NpcObservation]
     attention_edges: list[AttentionEdge] = Field(default_factory=list)
 
     @model_validator(mode="after")
-    def check_references_resolve(self) -> WorldSnapshot:
-        candidate_ids = [candidate.npc_id for candidate in self.candidates]
-        if len(set(candidate_ids)) != len(candidate_ids):
-            raise ValueError("candidates must have unique npc_id values")
+    def check_candidate_set_is_consistent(self) -> WorldSnapshot:
+        npc_ids = [observation.npc_id for observation in self.npcs]
+        if self.candidate_count != len(npc_ids):
+            raise ValueError(f"candidate_count must equal len(npcs) ({len(npc_ids)})")
+        if len(set(npc_ids)) != len(npc_ids):
+            raise ValueError("npcs must have unique npc_id values")
 
-        known = set(candidate_ids)
-        if self.active_conversation and self.active_conversation.npc_id not in known:
-            raise ValueError("active_conversation.npc_id must be a candidate npc_id")
-
-        seen_edges: set[tuple[str, str, str]] = set()
+        candidates = set(npc_ids)
+        if self.active_conversation and self.active_conversation.target_npc_id not in candidates:
+            raise ValueError("active_conversation.target_npc_id must be a candidate npc_id")
         for edge in self.attention_edges:
-            if edge.source_npc_id == edge.target_npc_id:
-                raise ValueError("attention_edges must not contain self edges")
-            if not known.issuperset({edge.source_npc_id, edge.target_npc_id}):
+            if not candidates.issuperset({edge.source_npc_id, edge.target_npc_id}):
                 raise ValueError("attention_edges must reference candidate npc_id values")
-            identity = (edge.source_npc_id, edge.target_npc_id, edge.relation)
-            if identity in seen_edges:
-                raise ValueError("attention_edges must be unique")
-            seen_edges.add(identity)
 
         return self
 

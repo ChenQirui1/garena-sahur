@@ -11,6 +11,7 @@ from backend.ingestion.intake_service import IntakeOutcome, IntakeService
 from backend.ingestion.message_validation import TOPIC_WORLD_SNAPSHOT, WorldSnapshot
 from backend.ingestion.tests.canonical_messages import world_snapshot
 from backend.ingestion.world_state_store import StorageUnavailable, WorldStateStore
+from backend.orchestration.conversation_manager import ActiveConversationProjection
 from backend.orchestration.router_handoff import RouterHandoff
 from backend.orchestration.tests.fake_routers import RecordingRouter
 
@@ -37,7 +38,12 @@ async def test_unavailable_storage_is_reported_and_nothing_is_routed(
     handoff: tuple[RouterHandoff, RecordingRouter],
 ) -> None:
     started, router = handoff
-    service = IntakeService(UnavailableStore(), started, max_snapshot_candidates=128)
+    service = IntakeService(
+        store=UnavailableStore(),
+        conversation=ActiveConversationProjection(),
+        handoff=started,
+        max_snapshot_candidates=128,
+    )
 
     result = service.submit(SNAPSHOT_TOPIC, world_snapshot())
 

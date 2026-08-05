@@ -13,6 +13,7 @@ from backend.ingestion.jsonl_intake import JsonlIntakeError, submit_jsonl
 from backend.ingestion.message_validation import TOPIC_WORLD_SNAPSHOT
 from backend.ingestion.tests.canonical_messages import SESSION_ID, WORLD_ID, world_snapshot
 from backend.ingestion.world_state_store import WorldStateStore
+from backend.orchestration.conversation_manager import ActiveConversationProjection
 from backend.orchestration.router_handoff import RouterHandoff
 from backend.orchestration.tests.fake_routers import RecordingRouter
 
@@ -30,7 +31,12 @@ async def service() -> AsyncIterator[tuple[IntakeService, RouterHandoff, Recordi
     await handoff.start()
     try:
         yield (
-            IntakeService(WorldStateStore(), handoff, max_snapshot_candidates=128),
+            IntakeService(
+                store=WorldStateStore(),
+                conversation=ActiveConversationProjection(),
+                handoff=handoff,
+                max_snapshot_candidates=128,
+            ),
             handoff,
             router,
         )
@@ -59,7 +65,7 @@ async def test_records_share_the_application_service_and_reach_the_router(
         IntakeOutcome.APPLIED,
         IntakeOutcome.STALE,
     ]
-    assert handoff.latest_outcome(SESSION_ID, WORLD_ID).source_sequence == 2
+    assert handoff.latest_outcome(SESSION_ID, WORLD_ID).sequence == 2
     assert router.routed != []
 
 
@@ -71,7 +77,7 @@ async def test_records_share_the_application_service_and_reach_the_router(
         (json.dumps({"topic": SNAPSHOT_TOPIC, "message": {}, "extra": 1}), "exactly topic and message"),
         (json.dumps({"topic": 7, "message": {}}), "topic must be a string"),
         (record("world.weather", world_snapshot()), "unknown_topic"),
-        (record(SNAPSHOT_TOPIC, world_snapshot(sequence=0)), "invalid"),
+        (record(SNAPSHOT_TOPIC, world_snapshot(candidate_count=9)), "invalid"),
     ],
 )
 async def test_a_bad_record_fails_fast_with_its_line_number(

@@ -90,13 +90,15 @@ def _as_routing_body(outcome: RoutingOutcome) -> dict[str, Any]:
     return {
         "session_id": outcome.session_id,
         "world_id": outcome.world_id,
-        "source_sequence": outcome.source_sequence,
+        "sequence": outcome.sequence,
         "status": outcome.status.value,
         "failure_reason": outcome.failure_reason,
         "assignments": [
             {
                 "npc_id": assignment.npc_id,
                 "tier": assignment.tier.value,
+                "previous_tier": assignment.previous_tier,
+                "changed": assignment.changed,
                 "reasons": list(assignment.reasons),
             }
             for assignment in outcome.assignments
