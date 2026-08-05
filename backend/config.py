@@ -5,8 +5,15 @@ Owner: Jerome & Richard
 
 from __future__ import annotations
 
+from pathlib import Path
+
 from pydantic import Field
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+
+def default_database_path() -> Path:
+    """Keep operational state on the device rather than in the checkout."""
+    return Path.home() / ".spotlight" / "spotlight.sqlite3"
 
 
 class Settings(BaseSettings):
@@ -24,6 +31,22 @@ class Settings(BaseSettings):
     port: int = Field(default=8000, ge=1, le=65535)
     log_level: str = "info"
     max_snapshot_candidates: int = Field(default=128, ge=1, le=4096)
+
+    database_path: Path = Field(default_factory=default_database_path)
+    npc_profiles_path: Path = Path("data/npc_profiles.json")
+
+    # Specification #1: a command is acceptable for 15 seconds from its creation.
+    command_lifetime_ms: int = Field(default=15_000, gt=0)
+
+    # No tokenizer dependency is scoped by any issue, so the token ceilings below are enforced
+    # against a deterministic character estimate rather than a real encoder.
+    characters_per_token: int = Field(default=4, gt=0)
+
+    focused_input_token_limit: int = Field(default=2_000, gt=0)
+    focused_output_token_limit: int = Field(default=120, gt=0)
+    focused_history_turns: int = Field(default=8, ge=0)
+    reactive_input_token_limit: int = Field(default=600, gt=0)
+    reactive_output_token_limit: int = Field(default=40, gt=0)
 
 
 def load_settings() -> Settings:

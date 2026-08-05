@@ -3,17 +3,18 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import AsyncIterator
 
 import pytest
 import pytest_asyncio
 
+from backend.config import Settings
 from backend.ingestion.intake_service import IntakeOutcome, IntakeService
 from backend.ingestion.jsonl_intake import JsonlIntakeError, submit_jsonl
 from backend.ingestion.message_validation import TOPIC_WORLD_SNAPSHOT
 from backend.ingestion.tests.canonical_messages import SESSION_ID, WORLD_ID, world_snapshot
-from backend.ingestion.world_state_store import WorldStateStore
-from backend.orchestration.conversation_manager import ActiveConversationProjection
+from backend.main import Adapters, build_pipeline
 from backend.orchestration.router_handoff import RouterHandoff
 from backend.orchestration.tests.fake_routers import RecordingRouter
 
@@ -25,23 +26,20 @@ def record(topic: str, message: dict) -> str:
 
 
 @pytest_asyncio.fixture
-async def service() -> AsyncIterator[tuple[IntakeService, RouterHandoff, RecordingRouter]]:
+async def service(
+    tmp_path: Path,
+) -> AsyncIterator[tuple[IntakeService, RouterHandoff, RecordingRouter]]:
     router = RecordingRouter()
-    handoff = RouterHandoff(router)
-    await handoff.start()
+    pipeline = build_pipeline(
+        Settings(database_path=tmp_path / "spotlight.sqlite3"), Adapters(router=router)
+    )
+    await pipeline.store.open()
+    await pipeline.handoff.start()
     try:
-        yield (
-            IntakeService(
-                store=WorldStateStore(),
-                conversation=ActiveConversationProjection(),
-                handoff=handoff,
-                max_snapshot_candidates=128,
-            ),
-            handoff,
-            router,
-        )
+        yield pipeline.intake, pipeline.handoff, router
     finally:
-        await handoff.stop()
+        await pipeline.handoff.stop()
+        await pipeline.store.close()
 
 
 async def test_records_share_the_application_service_and_reach_the_router(
@@ -49,7 +47,7 @@ async def test_records_share_the_application_service_and_reach_the_router(
 ) -> None:
     intake, handoff, router = service
 
-    results = submit_jsonl(
+    results = await submit_jsonl(
         [
             record(SNAPSHOT_TOPIC, world_snapshot(sequence=1)),
             "",
@@ -89,7 +87,7 @@ async def test_a_bad_record_fails_fast_with_its_line_number(
     lines = [record(SNAPSHOT_TOPIC, world_snapshot(sequence=1)), line, "unreachable"]
 
     with pytest.raises(JsonlIntakeError) as rejected:
-        submit_jsonl(lines, intake)
+        await submit_jsonl(lines, intake)
 
     assert rejected.value.line_number == 2
     assert reason in rejected.value.reason

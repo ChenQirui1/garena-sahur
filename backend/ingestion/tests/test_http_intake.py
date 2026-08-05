@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
+from pathlib import Path
 from typing import Any, AsyncIterator, NamedTuple
 
 import pytest_asyncio
@@ -23,7 +24,7 @@ from backend.ingestion.tests.canonical_messages import (
     npc,
     world_snapshot,
 )
-from backend.main import create_app
+from backend.main import Adapters, create_app
 from backend.orchestration.router_handoff import RouterHandoff
 from backend.orchestration.router_port import RouterPort
 from backend.orchestration.tests.fake_routers import RaisingRouter, RecordingRouter
@@ -36,8 +37,13 @@ class Backend(NamedTuple):
 
 
 @asynccontextmanager
-async def backend_for(router: RouterPort, **settings: object) -> AsyncIterator[Backend]:
-    app = create_app(settings=Settings(**settings), router=router)
+async def backend_for(
+    router: RouterPort, tmp_path: Path, **settings: object
+) -> AsyncIterator[Backend]:
+    app = create_app(
+        settings=Settings(database_path=tmp_path / "spotlight.sqlite3", **settings),
+        adapters=Adapters(router=router),
+    )
     async with LifespanManager(app):
         async with AsyncClient(
             transport=ASGITransport(app=app), base_url="http://backend"
@@ -46,8 +52,8 @@ async def backend_for(router: RouterPort, **settings: object) -> AsyncIterator[B
 
 
 @pytest_asyncio.fixture
-async def backend() -> AsyncIterator[Backend]:
-    async with backend_for(RecordingRouter()) as running:
+async def backend(tmp_path: Path) -> AsyncIterator[Backend]:
+    async with backend_for(RecordingRouter(), tmp_path) as running:
         yield running
 
 
@@ -228,8 +234,8 @@ async def test_an_invalid_snapshot_is_rejected_before_state_changes(backend: Bac
     assert (await observe_routing(backend))[0] == 404
 
 
-async def test_more_candidates_than_configured_are_rejected() -> None:
-    async with backend_for(RecordingRouter(), max_snapshot_candidates=1) as backend:
+async def test_more_candidates_than_configured_are_rejected(tmp_path: Path) -> None:
+    async with backend_for(RecordingRouter(), tmp_path, max_snapshot_candidates=1) as backend:
         code, body = await ingest(backend, TOPIC_WORLD_SNAPSHOT, world_snapshot())
 
         assert code == 422
@@ -259,8 +265,10 @@ async def test_a_malformed_envelope_is_rejected(backend: Backend) -> None:
     assert response.status_code == 422
 
 
-async def test_a_router_failure_is_observable_without_an_invented_tier() -> None:
-    async with backend_for(RaisingRouter()) as backend:
+async def test_a_router_failure_is_observable_without_an_invented_tier(
+    tmp_path: Path,
+) -> None:
+    async with backend_for(RaisingRouter(), tmp_path) as backend:
         code, _ = await ingest(backend, TOPIC_WORLD_SNAPSHOT, world_snapshot(sequence=5))
         assert code == 202
 
@@ -289,8 +297,13 @@ async def test_snapshot_intake_stops_at_the_routing_outcome(backend: Backend) ->
     assert (await backend.client.get("/commands")).status_code == 404
 
 
-async def test_liveness_and_readiness_distinguish_running_from_ready() -> None:
-    app = create_app(settings=Settings(), router=RecordingRouter())
+async def test_liveness_and_readiness_distinguish_running_from_ready(
+    tmp_path: Path,
+) -> None:
+    app = create_app(
+        settings=Settings(database_path=tmp_path / "spotlight.sqlite3"),
+        adapters=Adapters(router=RecordingRouter()),
+    )
     async with AsyncClient(transport=ASGITransport(app=app), base_url="http://backend") as client:
         assert (await client.get("/health/live")).json() == {"status": "alive"}
 

@@ -16,7 +16,12 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, Validation
 SCHEMA_VERSION = "1.0"
 
 TOPIC_WORLD_SNAPSHOT = "world.snapshot"
+TOPIC_CONVERSATION_TURN = "conversation.turn"
 TOPIC_LEGACY_NPC_PROFILE = "npc.profile"
+
+# The only speaker the team payload shows. The value stays open (#2 owns the enum) but this is
+# the one that makes a turn a player utterance, and only a player utterance can trigger work.
+SPEAKER_TYPE_PLAYER = "player"
 
 # A JSON number, whether the publisher wrote it with a decimal point or not.
 JsonNumber = float | int
@@ -120,10 +125,41 @@ class WorldSnapshot(CanonicalModel):
         return self
 
 
+class ConversationTurn(CanonicalModel):
+    """A durable utterance in a conversation, deduplicated by its turn identity."""
+
+    schema_version: Literal["1.0"]
+    message_type: Literal["conversation_turn"]
+    session_id: NonEmptyText
+    conversation_id: NonEmptyText
+    turn_id: NonEmptyText
+    turn_index: Annotated[int, Field(ge=0)]
+    timestamp_ms: Annotated[int, Field(ge=0)]
+    speaker_type: NonEmptyText
+    speaker_id: NonEmptyText
+    target_npc_id: NonEmptyText
+    text: str
+
+    @property
+    def is_player_turn(self) -> bool:
+        return self.speaker_type == SPEAKER_TYPE_PLAYER
+
+
 def validate_world_snapshot(payload: object) -> WorldSnapshot:
     """Normalize a wire payload into a canonical world snapshot or reject it."""
+    return _validate(WorldSnapshot, payload)
+
+
+def validate_conversation_turn(payload: object) -> ConversationTurn:
+    """Normalize a wire payload into a canonical conversation turn or reject it."""
+    return _validate(ConversationTurn, payload)
+
+
+def _validate[Canonical: CanonicalModel](
+    model: type[Canonical], payload: object
+) -> Canonical:
     try:
-        return WorldSnapshot.model_validate(payload)
+        return model.model_validate(payload)
     except ValidationError as invalid:
         raise MessageValidationError(_summarize(invalid)) from invalid
 

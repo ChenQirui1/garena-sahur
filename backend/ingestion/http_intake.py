@@ -5,7 +5,7 @@ Owner: Jerome & Richard
 
 from __future__ import annotations
 
-from typing import Annotated, Any, cast
+from typing import TYPE_CHECKING, Annotated, Any, cast
 
 from fastapi import APIRouter, Depends, Request, Response, status
 from pydantic import BaseModel, ConfigDict
@@ -13,9 +13,13 @@ from pydantic import BaseModel, ConfigDict
 from backend.ingestion.intake_service import IntakeOutcome, IntakeResult, IntakeService
 from backend.orchestration.router_handoff import RouterHandoff, RoutingOutcome
 
+if TYPE_CHECKING:
+    from backend.main import Pipeline
+
 STATUS_FOR_OUTCOME = {
     IntakeOutcome.APPLIED: status.HTTP_202_ACCEPTED,
     IntakeOutcome.STALE: status.HTTP_200_OK,
+    IntakeOutcome.DUPLICATE: status.HTTP_200_OK,
     IntakeOutcome.IGNORED: status.HTTP_200_OK,
     IntakeOutcome.INVALID: status.HTTP_422_UNPROCESSABLE_CONTENT,
     IntakeOutcome.UNKNOWN_TOPIC: status.HTTP_400_BAD_REQUEST,
@@ -38,6 +42,10 @@ def _router_handoff(request: Request) -> RouterHandoff:
     return cast(RouterHandoff, request.app.state.pipeline.handoff)
 
 
+def _pipeline(request: Request) -> "Pipeline":
+    return cast("Pipeline", request.app.state.pipeline)
+
+
 router = APIRouter()
 
 
@@ -47,7 +55,7 @@ async def ingest(
     response: Response,
     service: Annotated[IntakeService, Depends(_intake_service)],
 ) -> dict[str, str | None]:
-    result = service.submit(submission.topic, submission.message)
+    result = await service.submit(submission.topic, submission.message)
     response.status_code = STATUS_FOR_OUTCOME[result.outcome]
     return _as_body(result)
 
@@ -74,12 +82,12 @@ async def liveness() -> dict[str, str]:
 @router.get("/health/ready")
 async def readiness(
     response: Response,
-    handoff: Annotated[RouterHandoff, Depends(_router_handoff)],
+    pipeline: Annotated["Pipeline", Depends(_pipeline)],
 ) -> dict[str, str]:
-    if not handoff.is_running:
-        response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
-        return {"status": "router handoff is not running"}
-    return {"status": "ready"}
+    if pipeline.is_ready:
+        return {"status": "ready"}
+    response.status_code = status.HTTP_503_SERVICE_UNAVAILABLE
+    return {"status": pipeline.readiness_error or "the owned pipeline is not running"}
 
 
 def _as_body(result: IntakeResult) -> dict[str, str | None]:
