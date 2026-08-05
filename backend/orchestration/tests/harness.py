@@ -23,8 +23,9 @@ from backend.ingestion.tests.canonical_messages import (
     world_snapshot,
 )
 from backend.main import Adapters, Pipeline, create_app
+from backend.orchestration.behaviour_command import BehaviourCommand
 from backend.orchestration.conversation_manager import ConversationState
-from backend.orchestration.router_port import RouterPort
+from backend.orchestration.router_port import RouterPort, RoutingNpc, RoutingSnapshot
 from backend.orchestration.tests.fake_routers import RecordingRouter
 from backend.orchestration.tests.fakes import (
     ManualClock,
@@ -73,7 +74,7 @@ class Harness:
         publisher: RecordingPublisher,
         telemetry: RecordingTelemetry,
         clock: ManualClock,
-        router: RecordingRouter,
+        router: RouterPort,
     ) -> None:
         self.client = client
         self.pipeline = pipeline
@@ -81,6 +82,12 @@ class Harness:
         self.telemetry = telemetry
         self.clock = clock
         self.router = router
+
+    @property
+    def routed(self) -> list[RoutingSnapshot]:
+        """Every snapshot the Router saw, for the suites that run a recording one."""
+        assert isinstance(self.router, RecordingRouter)
+        return self.router.routed
 
     async def ingest(self, topic: str, message: dict[str, Any]) -> Any:
         return await self.client.post("/ingest", json={"topic": topic, "message": message})
@@ -94,6 +101,10 @@ class Harness:
     async def event(self, revision: int = 1, **overrides: Any) -> Any:
         return await self.ingest("game.event", game_event(revision, **overrides))
 
+    async def settle(self) -> None:
+        """Wait for the coalescing routing worker, which snapshot refresh runs on."""
+        await self.pipeline.handoff.wait_until_idle()
+
     def state(self) -> ConversationState:
         return self.pipeline.intake.conversation.state(SESSION_ID)
 
@@ -104,11 +115,11 @@ class Harness:
             if observation.name == name
         ]
 
-    def routed_npc(self, npc_id: str) -> Any:
+    def routed_npc(self, npc_id: str) -> RoutingNpc:
         """The enrichment the Router last saw for one candidate."""
-        return next(npc for npc in self.router.routed[-1].npcs if npc.npc_id == npc_id)
+        return next(npc for npc in self.routed[-1].npcs if npc.npc_id == npc_id)
 
-    def published_for(self, npc_id: str) -> list[Any]:
+    def published_for(self, npc_id: str) -> list[BehaviourCommand]:
         return [command for command in self.publisher.published if command.npc_id == npc_id]
 
 

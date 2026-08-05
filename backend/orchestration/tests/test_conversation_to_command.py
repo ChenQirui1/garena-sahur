@@ -257,7 +257,7 @@ async def test_the_router_sees_the_conversation_projection_and_its_latest_turn(
     await harness.snapshot(active_conversation=active_conversation())
     await harness.turn()
 
-    routed = harness.router.routed[-1].active_conversation
+    routed = harness.routed[-1].active_conversation
     assert routed is not None
     assert routed.conversation_id == CONVERSATION_ID
     assert routed.target_npc_id == SHOPKEEPER

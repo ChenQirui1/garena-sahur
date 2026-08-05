@@ -81,7 +81,7 @@ class EventStore:
             " ORDER BY event_revision DESC LIMIT 1",
             (session_id, event_id),
         )
-        return next((_stored(row) for row in rows), None)
+        return next((_stored(*row) for row in rows), None)
 
     async def active(self, session_id: str) -> tuple[StoredEvent, ...]:
         """Every event whose newest revision has not ended or been cancelled.
@@ -100,7 +100,7 @@ class EventStore:
             " ORDER BY chain.started_at_ms, newest.event_id",
             (session_id, session_id),
         )
-        stored = (_stored(row) for row in rows)
+        stored = (_stored(*row) for row in rows)
         return tuple(one for one in stored if not one.event.is_terminal)
 
     async def _revision(
@@ -111,7 +111,7 @@ class EventStore:
             " WHERE session_id = ? AND event_id = ? AND event_revision = ?",
             (session_id, event_id, revision),
         )
-        return next((_stored(row) for row in rows), None)
+        return next((_stored(*row) for row in rows), None)
 
     async def _insert(self, event: GameEvent, witnesses: frozenset[str]) -> None:
         connection = self._store.connection
@@ -161,8 +161,7 @@ def _rejection(event: GameEvent, latest: StoredEvent | None) -> str | None:
     return None
 
 
-def _stored(row: tuple[str, str]) -> StoredEvent:
-    payload, witnesses = row
+def _stored(payload: str, witnesses: str) -> StoredEvent:
     return StoredEvent(
         event=validate_game_event(json.loads(payload)),
         witnesses=frozenset(json.loads(witnesses)),
