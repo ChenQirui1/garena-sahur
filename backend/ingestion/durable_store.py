@@ -46,10 +46,6 @@ SCHEMA = (
     )
     """,
     """
-    CREATE INDEX IF NOT EXISTS game_events_by_event
-        ON game_events (session_id, event_id, event_revision)
-    """,
-    """
     CREATE TABLE IF NOT EXISTS generation_claims (
         claim_key TEXT PRIMARY KEY,
         claimed_at_ms INTEGER NOT NULL

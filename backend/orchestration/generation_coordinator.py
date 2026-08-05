@@ -31,7 +31,7 @@ from backend.orchestration.clock import Clock
 from backend.orchestration.command_store import CommandStore
 from backend.orchestration.conversation_manager import ConversationManager
 from backend.orchestration.deduplication import GenerationClaims
-from backend.orchestration.event_relevance import ROLE_ORDER, EventRadii, roles_in
+from backend.orchestration.event_relevance import EventRadii, ordered_roles, roles_in
 from backend.orchestration.generation_policy import (
     EventGeneration,
     TurnGeneration,
@@ -138,9 +138,23 @@ class GenerationCoordinator:
             )
             return
 
-        roles_by_npc = await self._roles_by_npc(event, snapshot)
-        # A terminal revision still refreshes routing; it just never asks for generation.
-        outcome = await self._route(event.session_id, snapshot)
+        try:
+            roles_by_npc = await self._roles_by_npc(event, snapshot)
+            # A terminal revision still refreshes routing; it just never asks for generation.
+            outcome = await self._route(event.session_id, snapshot)
+        except StorageUnavailable as unavailable:
+            # The revision is committed and acknowledged; only the reaction is lost, and a
+            # later revision can still produce one.
+            self.observations.note(
+                EVENT_GENERATION_SUPPRESSED,
+                session_id=event.session_id,
+                event_id=event.event_id,
+                event_revision=event.event_revision,
+                npc_id=None,
+                reason=f"routing state is unavailable: {unavailable}",
+            )
+            return
+
         decision = decide_for_event(event, outcome, roles_by_npc)
         for npc_id, reason in decision.suppressed:
             self._suppress_event(event, npc_id, reason)
@@ -171,10 +185,8 @@ class GenerationCoordinator:
         if stored is None:
             return {}
         roles = {
-            observation.npc_id: tuple(
-                role
-                for role in ROLE_ORDER
-                if role in roles_in(observation.npc_id, observation.position, stored, self.radii)
+            observation.npc_id: ordered_roles(
+                roles_in(observation.npc_id, observation.position, stored, self.radii)
             )
             for observation in snapshot.npcs
         }
@@ -243,9 +255,9 @@ class GenerationCoordinator:
         return self._request(
             generation.tier,
             context,
-            identity=(turn.session_id, turn.target_npc_id, turn.conversation_id, turn.turn_id),
             session_id=turn.session_id,
             npc_id=turn.target_npc_id,
+            trigger=(turn.conversation_id, turn.turn_id),
             conversation_id=turn.conversation_id,
             turn_id=turn.turn_id,
             event_id=None,
@@ -259,14 +271,9 @@ class GenerationCoordinator:
         return self._request(
             generation.tier,
             context,
-            identity=(
-                event.session_id,
-                generation.npc_id,
-                event.event_id,
-                str(event.event_revision),
-            ),
             session_id=event.session_id,
             npc_id=generation.npc_id,
+            trigger=(event.event_id, str(event.event_revision)),
             conversation_id=None,
             turn_id=None,
             event_id=event.event_id,
@@ -278,19 +285,21 @@ class GenerationCoordinator:
         tier: AttentionTier,
         context: GenerationContext,
         *,
-        identity: tuple[str | None, ...],
         session_id: str,
         npc_id: str,
+        trigger: tuple[str | None, str | None],
         conversation_id: str | None,
         turn_id: str | None,
         event_id: str | None,
         source_sequence: int,
     ) -> GenerationRequest:
+        """``trigger`` is what makes this request distinct for this NPC in this session, so a
+        retry of the same work reuses the same identifiers and a new trigger never collides."""
         render = (
             render_focused_prompt if tier is AttentionTier.FOCUSED else render_reactive_prompt
         )
         return GenerationRequest(
-            request_id=f"request-{identity_digest(*identity)}",
+            request_id=f"request-{identity_digest(session_id, npc_id, *trigger)}",
             session_id=session_id,
             npc_id=npc_id,
             npc_name=context.npc.name,

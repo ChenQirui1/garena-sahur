@@ -86,6 +86,20 @@ async def test_a_conflicting_duplicate_revision_is_rejected(harness: Harness) ->
     assert "conflict" in (conflicting.json()["detail"] or "")
 
 
+async def test_a_delivery_identity_reused_for_other_content_is_rejected(
+    harness: Harness,
+) -> None:
+    """§11.2 deduplicates by `message_id`, so one delivery cannot carry two revisions."""
+    await seed(harness)
+    await harness.event(revision=1)
+    reused = await harness.event(revision=2, status="updated", message_id="event-message-001")
+
+    assert reused.status_code == 422
+    assert "conflict" in (reused.json()["detail"] or "")
+    stored = await harness.pipeline.intake.events.active(SESSION_ID)
+    assert stored[0].event.event_revision == 1
+
+
 async def test_the_first_revision_of_an_event_must_be_one(harness: Harness) -> None:
     await seed(harness)
     response = await harness.event(revision=2)

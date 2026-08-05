@@ -54,10 +54,22 @@ class EventStore:
 
     async def record(self, event: GameEvent, witnesses: Iterable[str]) -> RevisionResult:
         """Commit one revision, or explain why the chain cannot accept it."""
+        # Delivery identity first: the team payload deduplicates by `message_id`, so a
+        # redelivered message is idempotent whatever else it says, and one reused for
+        # different content is a publisher fault rather than a new revision.
+        delivered = await self._delivered(event.session_id, event.message_id)
+        if delivered is not None:
+            if delivered.event == event:
+                return RevisionResult(RevisionOutcome.DUPLICATE)
+            return RevisionResult(
+                RevisionOutcome.REJECTED,
+                f"delivery {event.message_id} already carried revision"
+                f" {delivered.event.event_revision} of {delivered.event.event_id}"
+                " and this message conflicts with it",
+            )
+
         existing = await self._revision(event.session_id, event.event_id, event.event_revision)
         if existing is not None:
-            if existing.event == event:
-                return RevisionResult(RevisionOutcome.DUPLICATE)
             return RevisionResult(
                 RevisionOutcome.REJECTED,
                 f"revision {event.event_revision} of {event.event_id} conflicts with the"
@@ -102,6 +114,14 @@ class EventStore:
         )
         stored = (_stored(*row) for row in rows)
         return tuple(one for one in stored if not one.event.is_terminal)
+
+    async def _delivered(self, session_id: str, message_id: str) -> StoredEvent | None:
+        rows = await self._store.connection.execute_fetchall(
+            "SELECT payload, witnesses FROM game_events"
+            " WHERE session_id = ? AND message_id = ?",
+            (session_id, message_id),
+        )
+        return next((_stored(*row) for row in rows), None)
 
     async def _revision(
         self, session_id: str, event_id: str, revision: int

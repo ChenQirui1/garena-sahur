@@ -12,7 +12,11 @@ whether it was robbed than on what the event is called.
 
 from __future__ import annotations
 
-from backend.ingestion.message_validation import GameEvent
+from backend.ingestion.message_validation import (
+    EVENT_STATUS_STARTED,
+    EVENT_STATUS_UPDATED,
+    GameEvent,
+)
 from backend.orchestration.event_relevance import (
     ROLE_ACTOR,
     ROLE_NEARBY,
@@ -30,8 +34,8 @@ INVOLVEMENT_FOR_ROLE = {
 }
 
 STATUS_FOR_EVENT = {
-    "started": "has just begun",
-    "updated": "is still going on and has changed",
+    EVENT_STATUS_STARTED: "has just begun",
+    EVENT_STATUS_UPDATED: "is still going on and has changed",
 }
 
 

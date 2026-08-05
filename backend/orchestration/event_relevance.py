@@ -62,6 +62,11 @@ def witnesses_at_start(
 
     Called once per event. With no world state yet there are no candidates and the set is
     empty, which is correct and permanent: nothing later can establish who was present.
+
+    Membership is proximity alone. The handoff contract also asks that "the event layer
+    considers it able to perceive the event", but nothing upstream carries that: the snapshot's
+    `line_of_sight` is sight of the *player*, not of the event, and using it here would answer a
+    different question. Raised on #2, which owns what Minecraft publishes per event.
     """
     return frozenset(
         observation.npc_id
@@ -85,8 +90,13 @@ def enrichment_for(
     roles = {role for event in active for role in roles_in(npc_id, position, event, radii)}
     return NpcEventEnrichment(
         event_relevance=relevance_of(roles),
-        event_roles=[role for role in ROLE_ORDER if role in roles],
+        event_roles=list(ordered_roles(roles)),
     )
+
+
+def ordered_roles(roles: frozenset[str] | set[str]) -> tuple[str, ...]:
+    """Roles strongest first, so one NPC's roles read the same way on every call."""
+    return tuple(role for role in ROLE_ORDER if role in roles)
 
 
 def roles_in(
