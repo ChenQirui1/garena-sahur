@@ -1,0 +1,5 @@
+# Jerome & Richard — backend configuration
+/.env
+
+# macOS metadata
+.DS_Store
