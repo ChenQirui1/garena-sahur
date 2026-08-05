@@ -78,9 +78,6 @@ class RouterHandoff:
         self._idle.clear()
         self._submitted.set()
 
-    def reset_session(self, session_id: str) -> None:
-        self._router.reset_session(session_id)
-
     def latest_outcome(self, session_id: str, world_id: str) -> RoutingOutcome | None:
         return self._outcomes.get((session_id, world_id))
 

@@ -1,11 +1,11 @@
-"""A stand-in Router that keeps every candidate Ambient.
+"""The Router stand-in the development service runs until the real Router exists.
 
 Owner: Jerome & Richard
 
-The Attention Router is owned by Elson & Daniel and `backend/router/` is still a scaffold.
-This stand-in proves the owned handoff without inventing routing: it never promotes an NPC,
-so no scoring, capacity, or hysteresis decision is duplicated here. Coordination issue #3
-freezes the real port; issue #10 replaces this with the real Router.
+`backend/router/` is still a scaffold and the port itself is only frozen by coordination
+issue #3, so the owned pipeline runs against a contract fake. This one authors no routing:
+Ambient is the tier that requires no decision, so no scoring, propagation, capacity, or
+hysteresis judgement is duplicated outside Elson & Daniel's Router. Issue #10 replaces it.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from backend.orchestration.router_port import AttentionTier, RoutingAssignment, 
 STAND_IN_REASON = "stand-in router: no attention routing available yet"
 
 
-class AmbientStubRouter:
+class AmbientOnlyRouter:
     def route(self, snapshot: RoutingSnapshot) -> tuple[RoutingAssignment, ...]:
         return tuple(
             RoutingAssignment(

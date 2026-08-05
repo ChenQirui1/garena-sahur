@@ -1,4 +1,4 @@
-"""Backend environment variables, broker settings and model configuration.
+"""Backend environment variables read from the process environment and `.env`.
 
 Owner: Jerome & Richard
 """

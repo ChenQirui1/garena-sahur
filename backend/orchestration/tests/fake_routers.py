@@ -17,7 +17,6 @@ class RecordingRouter:
 
     def __init__(self) -> None:
         self.routed: list[RoutingSnapshot] = []
-        self.reset_sessions: list[str] = []
 
     def route(self, snapshot: RoutingSnapshot) -> tuple[RoutingAssignment, ...]:
         self.routed.append(snapshot)
@@ -34,7 +33,7 @@ class RecordingRouter:
         )
 
     def reset_session(self, session_id: str) -> None:
-        self.reset_sessions.append(session_id)
+        return None
 
 
 class RaisingRouter:

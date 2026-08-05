@@ -8,13 +8,13 @@ import pytest_asyncio
 
 from backend.ingestion.http_intake import STATUS_FOR_OUTCOME
 from backend.ingestion.intake_service import IntakeOutcome, IntakeService
-from backend.ingestion.message_validation import WorldSnapshot
+from backend.ingestion.message_validation import TOPIC_WORLD_SNAPSHOT, WorldSnapshot
 from backend.ingestion.tests.canonical_messages import world_snapshot
 from backend.ingestion.world_state_store import StorageUnavailable, WorldStateStore
 from backend.orchestration.router_handoff import RouterHandoff
 from backend.orchestration.tests.fake_routers import RecordingRouter
 
-SNAPSHOT_TOPIC = "world.snapshot"
+SNAPSHOT_TOPIC = TOPIC_WORLD_SNAPSHOT
 
 
 class UnavailableStore(WorldStateStore):

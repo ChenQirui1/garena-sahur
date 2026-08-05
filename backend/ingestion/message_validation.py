@@ -1,4 +1,4 @@
-"""Validate incoming JSON messages, IDs, timestamps and required fields.
+"""The canonical schema-version-1.0 boundary wire messages must satisfy.
 
 Owner: Jerome & Richard
 """

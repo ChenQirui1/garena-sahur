@@ -142,16 +142,6 @@ async def test_an_invalid_router_result_fails_closed_without_inventing_tiers(
     assert outcome.assignments == ()
 
 
-async def test_session_reset_reaches_the_router(
-    running_handoff: tuple[RouterHandoff, RecordingRouter],
-) -> None:
-    handoff, router = running_handoff
-
-    handoff.reset_session(SESSION_ID)
-
-    assert router.reset_sessions == [SESSION_ID]
-
-
 async def test_a_stopped_handoff_reports_that_it_is_not_running() -> None:
     handoff = RouterHandoff(RecordingRouter())
     assert handoff.is_running is False

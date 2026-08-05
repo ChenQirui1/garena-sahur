@@ -10,12 +10,13 @@ import pytest_asyncio
 
 from backend.ingestion.intake_service import IntakeOutcome, IntakeService
 from backend.ingestion.jsonl_intake import JsonlIntakeError, submit_jsonl
+from backend.ingestion.message_validation import TOPIC_WORLD_SNAPSHOT
 from backend.ingestion.tests.canonical_messages import SESSION_ID, WORLD_ID, world_snapshot
 from backend.ingestion.world_state_store import WorldStateStore
 from backend.orchestration.router_handoff import RouterHandoff
 from backend.orchestration.tests.fake_routers import RecordingRouter
 
-SNAPSHOT_TOPIC = "world.snapshot"
+SNAPSHOT_TOPIC = TOPIC_WORLD_SNAPSHOT
 
 
 def record(topic: str, message: dict) -> str:

@@ -31,11 +31,11 @@ class IngestionRequest(BaseModel):
 
 
 def _intake_service(request: Request) -> IntakeService:
-    return cast(IntakeService, request.app.state.intake_service)
+    return cast(IntakeService, request.app.state.pipeline.intake)
 
 
 def _router_handoff(request: Request) -> RouterHandoff:
-    return cast(RouterHandoff, request.app.state.router_handoff)
+    return cast(RouterHandoff, request.app.state.pipeline.handoff)
 
 
 router = APIRouter()
@@ -59,7 +59,6 @@ async def latest_routing(
     response: Response,
     handoff: Annotated[RouterHandoff, Depends(_router_handoff)],
 ) -> dict[str, Any] | None:
-    await handoff.wait_until_idle()
     outcome = handoff.latest_outcome(session_id, world_id)
     if outcome is None:
         response.status_code = status.HTTP_404_NOT_FOUND
