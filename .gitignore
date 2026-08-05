@@ -1,5 +1,10 @@
 # Jerome & Richard — backend configuration
 /.env
 
+# Python
+/.venv/
+__pycache__/
+.pytest_cache/
+
 # macOS metadata
 .DS_Store

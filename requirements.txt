@@ -1,2 +1,18 @@
 # Shared Python dependencies.
 # Owner: Jerome & Richard
+#
+# CPython 3.12. Direct dependencies are pinned; the broker, provider, and durable-store
+# dependencies from specification #1 arrive with the tickets that first use them.
+
+# Runtime
+fastapi==0.141.1
+uvicorn==0.52.1
+pydantic==2.13.4
+pydantic-settings==2.14.2
+python-dotenv==1.2.2
+
+# Test
+pytest==9.1.1
+pytest-asyncio==1.4.0
+httpx==0.28.1
+asgi-lifespan==2.1.0

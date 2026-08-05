@@ -1,0 +1,52 @@
+"""Development JSONL intake over the same application service as HTTP.
+
+Owner: Jerome & Richard
+"""
+
+from __future__ import annotations
+
+import json
+from typing import Any, Iterable
+
+from backend.ingestion.intake_service import IntakeOutcome, IntakeResult, IntakeService
+
+REJECTING_OUTCOMES = frozenset(
+    {IntakeOutcome.INVALID, IntakeOutcome.UNKNOWN_TOPIC, IntakeOutcome.STORAGE_UNAVAILABLE}
+)
+
+
+class JsonlIntakeError(ValueError):
+    """A JSONL line could not be accepted, so the remaining lines were not submitted."""
+
+    def __init__(self, line_number: int, reason: str) -> None:
+        super().__init__(f"line {line_number}: {reason}")
+        self.line_number = line_number
+        self.reason = reason
+
+
+def submit_jsonl(lines: Iterable[str], service: IntakeService) -> list[IntakeResult]:
+    """Submit each topic-message record in order, failing fast on the first rejection."""
+    results: list[IntakeResult] = []
+    for line_number, line in enumerate(lines, start=1):
+        if not line.strip():
+            continue
+        topic, message = _read_record(line_number, line)
+        result = service.submit(topic, message)
+        if result.outcome in REJECTING_OUTCOMES:
+            raise JsonlIntakeError(line_number, f"{result.outcome.value}: {result.detail}")
+        results.append(result)
+    return results
+
+
+def _read_record(line_number: int, line: str) -> tuple[str, dict[str, Any]]:
+    try:
+        record = json.loads(line)
+    except json.JSONDecodeError as malformed:
+        raise JsonlIntakeError(line_number, f"malformed JSON: {malformed.msg}") from malformed
+
+    if not isinstance(record, dict) or record.keys() != {"topic", "message"}:
+        raise JsonlIntakeError(line_number, "record must have exactly topic and message")
+    if not isinstance(record["topic"], str) or not isinstance(record["message"], dict):
+        raise JsonlIntakeError(line_number, "topic must be a string and message an object")
+
+    return record["topic"], record["message"]
