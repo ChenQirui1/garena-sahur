@@ -45,5 +45,19 @@ def test_ordering_is_kept_per_session_and_world() -> None:
     assert store.latest("demo-02", WORLD_ID).sequence == 1
 
 
+def test_retained_state_keeps_the_observations_later_enrichment_reads() -> None:
+    store = WorldStateStore()
+    store.apply_if_newer(validate_world_snapshot(world_snapshot()))
+
+    retained = store.latest(SESSION_ID, WORLD_ID)
+    assert retained is not None
+    assert retained.player.player_id == "player-uuid"
+    assert retained.player.look_direction.z == 0.69
+    assert retained.candidate_policy.entry_radius_blocks == 24.0
+    assert retained.candidate_count == 2
+    # Issue #7 derives witness membership from these positions.
+    assert retained.npcs[0].position.x == 108.1
+
+
 def test_an_unseen_session_has_no_retained_state() -> None:
     assert WorldStateStore().latest(SESSION_ID, WORLD_ID) is None

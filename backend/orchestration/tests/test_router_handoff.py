@@ -6,6 +6,7 @@ from typing import AsyncIterator
 
 import pytest
 import pytest_asyncio
+from pydantic import ValidationError
 
 from backend.orchestration.router_handoff import RouterHandoff, RoutingStatus
 from backend.orchestration.router_port import (
@@ -74,6 +75,34 @@ def assignment(npc_id: str, tier: object = AttentionTier.FOCUSED) -> RoutingAssi
     return RoutingAssignment(
         npc_id=npc_id, tier=tier, previous_tier=None, changed=True  # type: ignore[arg-type]
     )
+
+
+@pytest.mark.parametrize(
+    "out_of_range",
+    [
+        {"event_relevance": 1.5},
+        {"event_relevance": -0.1},
+        {"interaction_recency": 1.5},
+        {"viewport_center_distance": 1.5},
+        {"world_distance_blocks": -1.0},
+    ],
+)
+def test_the_router_never_receives_a_signal_outside_its_documented_range(
+    out_of_range: dict[str, float],
+) -> None:
+    inside_range = {
+        "npc_id": SHOPKEEPER,
+        "world_distance_blocks": 3.4,
+        "viewport_center_distance": 0.07,
+        "inside_viewport": True,
+        "line_of_sight": True,
+        "event_relevance": 0.0,
+        "event_roles": [],
+        "interaction_recency": 0.0,
+    }
+
+    with pytest.raises(ValidationError):
+        RoutingNpc(**(inside_range | out_of_range))
 
 
 @pytest_asyncio.fixture
