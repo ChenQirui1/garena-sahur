@@ -252,6 +252,36 @@ async def test_a_witness_stays_a_witness_after_walking_away(harness: Harness) ->
     assert routed.event_relevance == 0.4
 
 
+async def test_a_later_revision_does_not_reopen_the_witness_set(harness: Harness) -> None:
+    """The revision that could plausibly recompute it is the one that must not."""
+    latecomer = "latecomer-uuid"
+    onlooker = "onlooker-uuid"
+    await harness.snapshot(
+        npcs=[
+            *crowd(),
+            npc(latecomer, position=dict(BEYOND_NEARBY_BAND)),
+            npc(onlooker, position=dict(WITHIN_WITNESS_RADIUS)),
+        ],
+        candidate_count=6,
+    )
+    await harness.event(revision=1)
+
+    # The crowd rearranges completely, and only then does the event update.
+    await harness.snapshot(
+        sequence=1843,
+        npcs=[
+            *crowd(),
+            npc(latecomer, position=dict(WITHIN_WITNESS_RADIUS)),
+            npc(onlooker, position=dict(BEYOND_NEARBY_BAND)),
+        ],
+        candidate_count=6,
+    )
+    await harness.event(revision=2, status="updated")
+
+    assert harness.routed_npc(latecomer).event_roles == ["nearby"]
+    assert harness.routed_npc(onlooker).event_roles == ["witness"]
+
+
 async def test_the_nearby_band_is_configurable(tmp_path: Path) -> None:
     """Shrinking the band below the guard's distance leaves an unrelated NPC unrelated."""
     settings = settings_for(tmp_path, nearby_radius_blocks=5.0)
