@@ -12,11 +12,15 @@ from httpx import ASGITransport, AsyncClient
 from backend.config import Settings
 from backend.ingestion.message_validation import TOPIC_WORLD_SNAPSHOT
 from backend.ingestion.tests.canonical_messages import (
+    CONVERSATION_ID,
     SESSION_ID,
     SHOPKEEPER,
     THIEF,
+    TIMESTAMP_MS,
     WORLD_ID,
-    candidate,
+    active_conversation,
+    attention_edge,
+    npc,
     world_snapshot,
 )
 from backend.main import create_app
@@ -62,10 +66,7 @@ async def test_a_new_snapshot_is_accepted_and_reaches_the_router(backend: Backen
     code, body = await ingest(
         backend,
         TOPIC_WORLD_SNAPSHOT,
-        world_snapshot(
-            sequence=1842,
-            active_conversation={"conversation_id": "conversation-07", "npc_id": SHOPKEEPER},
-        ),
+        world_snapshot(sequence=1842, active_conversation=active_conversation()),
     )
     assert (code, body["outcome"]) == (202, "applied")
 
@@ -74,16 +75,133 @@ async def test_a_new_snapshot_is_accepted_and_reaches_the_router(backend: Backen
         {
             "session_id": SESSION_ID,
             "world_id": WORLD_ID,
-            "source_sequence": 1842,
+            "sequence": 1842,
             "status": "routed",
             "failure_reason": None,
             "assignments": [
-                {"npc_id": SHOPKEEPER, "tier": "focused", "reasons": []},
-                {"npc_id": THIEF, "tier": "ambient", "reasons": []},
+                {
+                    "npc_id": SHOPKEEPER,
+                    "tier": "focused",
+                    "previous_tier": None,
+                    "changed": True,
+                    "reasons": [],
+                },
+                {
+                    "npc_id": THIEF,
+                    "tier": "ambient",
+                    "previous_tier": None,
+                    "changed": True,
+                    "reasons": [],
+                },
             ],
         },
     )
-    assert [snapshot.source_sequence for snapshot in backend.router.routed] == [1842]
+
+
+async def test_the_router_receives_the_enriched_contract_shape(backend: Backend) -> None:
+    await ingest(
+        backend,
+        TOPIC_WORLD_SNAPSHOT,
+        world_snapshot(
+            sequence=1842,
+            active_conversation=active_conversation(),
+            attention_edges=[attention_edge()],
+        ),
+    )
+
+    routed = backend.router.routed[0]
+
+    assert routed.model_dump() == {
+        "schema_version": "1.0",
+        "snapshot_type": "routing_snapshot",
+        "session_id": SESSION_ID,
+        "world_id": WORLD_ID,
+        "sequence": 1842,
+        "timestamp_ms": TIMESTAMP_MS,
+        "candidate_policy": {"entry_radius_blocks": 24.0, "exit_radius_blocks": 28.0},
+        "active_event_ids": [],
+        "active_conversation": {
+            "conversation_id": CONVERSATION_ID,
+            "target_npc_id": SHOPKEEPER,
+            "state": "engaged",
+            "started_at_ms": TIMESTAMP_MS,
+            "latest_turn_id": None,
+        },
+        "candidate_count": 2,
+        "npcs": [
+            {
+                "npc_id": SHOPKEEPER,
+                "world_distance_blocks": 3.4,
+                "viewport_center_distance": 0.07,
+                "inside_viewport": True,
+                "line_of_sight": True,
+                "event_relevance": 0.0,
+                "event_roles": [],
+                "interaction_recency": 0.0,
+            },
+            {
+                "npc_id": THIEF,
+                "world_distance_blocks": 11.2,
+                "viewport_center_distance": 0.07,
+                "inside_viewport": True,
+                "line_of_sight": True,
+                "event_relevance": 0.0,
+                "event_roles": [],
+                "interaction_recency": 0.0,
+            },
+        ],
+        "attention_edges": [
+            {
+                "source_npc_id": THIEF,
+                "target_npc_id": SHOPKEEPER,
+                "kind": "gaze",
+                "active": True,
+            }
+        ],
+    }
+
+
+async def test_the_source_sequence_and_timestamp_survive_enrichment(backend: Backend) -> None:
+    await ingest(
+        backend, TOPIC_WORLD_SNAPSHOT, world_snapshot(sequence=99, timestamp_ms=1_700_000_000_001)
+    )
+
+    routed = backend.router.routed[0]
+    assert (routed.sequence, routed.timestamp_ms) == (99, 1_700_000_000_001)
+
+
+async def test_a_conversation_keeps_its_first_observed_start_across_snapshots(
+    backend: Backend,
+) -> None:
+    await ingest(
+        backend,
+        TOPIC_WORLD_SNAPSHOT,
+        world_snapshot(sequence=1, active_conversation=active_conversation()),
+    )
+    await ingest(
+        backend,
+        TOPIC_WORLD_SNAPSHOT,
+        world_snapshot(
+            sequence=2,
+            timestamp_ms=TIMESTAMP_MS + 4_000,
+            active_conversation=active_conversation(),
+        ),
+    )
+
+    assert [routed.active_conversation.started_at_ms for routed in backend.router.routed] == [
+        TIMESTAMP_MS,
+        TIMESTAMP_MS,
+    ]
+
+
+async def test_an_empty_candidate_set_is_accepted_and_routed(backend: Backend) -> None:
+    code, body = await ingest(
+        backend, TOPIC_WORLD_SNAPSHOT, world_snapshot(npcs=[], candidate_count=0)
+    )
+
+    assert (code, body["outcome"]) == (202, "applied")
+    assert backend.router.routed[0].npcs == []
+    assert (await observe_routing(backend))[1]["assignments"] == []
 
 
 async def test_a_duplicate_or_stale_snapshot_does_not_regress_state(backend: Backend) -> None:
@@ -96,16 +214,16 @@ async def test_a_duplicate_or_stale_snapshot_does_not_regress_state(backend: Bac
     assert (stale[0], stale[1]["outcome"]) == (200, "stale")
 
     _, observed = await observe_routing(backend)
-    assert observed["source_sequence"] == 7
-    assert [snapshot.source_sequence for snapshot in backend.router.routed] == [7]
+    assert observed["sequence"] == 7
+    assert [snapshot.sequence for snapshot in backend.router.routed] == [7]
 
 
 async def test_an_invalid_snapshot_is_rejected_before_state_changes(backend: Backend) -> None:
-    code, body = await ingest(backend, TOPIC_WORLD_SNAPSHOT, world_snapshot(sequence=0))
+    code, body = await ingest(backend, TOPIC_WORLD_SNAPSHOT, world_snapshot(candidate_count=9))
 
     assert code == 422
     assert body["outcome"] == "invalid"
-    assert "sequence" in body["detail"]
+    assert "candidate_count" in body["detail"]
     assert backend.router.routed == []
     assert (await observe_routing(backend))[0] == 404
 
@@ -158,14 +276,15 @@ async def test_snapshot_intake_stops_at_the_routing_outcome(backend: Backend) ->
         TOPIC_WORLD_SNAPSHOT,
         world_snapshot(
             sequence=1,
-            candidates=[candidate(SHOPKEEPER)],
-            active_conversation={"conversation_id": "conversation-07", "npc_id": SHOPKEEPER},
+            npcs=[npc(SHOPKEEPER)],
+            candidate_count=1,
+            active_conversation=active_conversation(),
         ),
     )
 
     _, observed = await observe_routing(backend)
 
-    assert observed["assignments"] == [{"npc_id": SHOPKEEPER, "tier": "focused", "reasons": []}]
+    assert [assignment["npc_id"] for assignment in observed["assignments"]] == [SHOPKEEPER]
     assert len(backend.router.routed) == 1
     assert (await backend.client.get("/commands")).status_code == 404
 

@@ -10,20 +10,37 @@ hysteresis judgement is duplicated outside Elson & Daniel's Router. Issue #10 re
 
 from __future__ import annotations
 
-from backend.orchestration.router_port import AttentionTier, RoutingAssignment, RoutingSnapshot
+from backend.orchestration.router_port import (
+    RESULT_SCHEMA_VERSION,
+    RESULT_TYPE,
+    AttentionTier,
+    RoutingAssignment,
+    RoutingResult,
+    RoutingSnapshot,
+)
 
 STAND_IN_REASON = "stand-in router: no attention routing available yet"
 
 
 class AmbientOnlyRouter:
-    def route(self, snapshot: RoutingSnapshot) -> tuple[RoutingAssignment, ...]:
-        return tuple(
-            RoutingAssignment(
-                npc_id=candidate.npc_id,
-                tier=AttentionTier.AMBIENT,
-                reasons=(STAND_IN_REASON,),
-            )
-            for candidate in snapshot.candidates
+    def route(self, snapshot: RoutingSnapshot) -> RoutingResult:
+        return RoutingResult(
+            schema_version=RESULT_SCHEMA_VERSION,
+            result_type=RESULT_TYPE,
+            session_id=snapshot.session_id,
+            world_id=snapshot.world_id,
+            sequence=snapshot.sequence,
+            timestamp_ms=snapshot.timestamp_ms,
+            assignments=tuple(
+                RoutingAssignment(
+                    npc_id=npc.npc_id,
+                    tier=AttentionTier.AMBIENT,
+                    previous_tier=None,
+                    changed=False,
+                    reasons=(STAND_IN_REASON,),
+                )
+                for npc in snapshot.npcs
+            ),
         )
 
     def reset_session(self, session_id: str) -> None:

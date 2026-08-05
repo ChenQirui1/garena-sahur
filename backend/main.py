@@ -15,6 +15,7 @@ from backend.config import Settings, load_settings
 from backend.ingestion import http_intake
 from backend.ingestion.intake_service import IntakeService
 from backend.ingestion.world_state_store import WorldStateStore
+from backend.orchestration.conversation_manager import ActiveConversationProjection
 from backend.orchestration.development_router import AmbientOnlyRouter
 from backend.orchestration.router_handoff import RouterHandoff
 from backend.orchestration.router_port import RouterPort
@@ -34,6 +35,7 @@ def build_pipeline(settings: Settings, router: RouterPort | None = None) -> Pipe
     return Pipeline(
         intake=IntakeService(
             store=WorldStateStore(),
+            conversation=ActiveConversationProjection(),
             handoff=handoff,
             max_snapshot_candidates=settings.max_snapshot_candidates,
         ),

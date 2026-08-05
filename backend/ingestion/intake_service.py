@@ -15,6 +15,7 @@ from backend.ingestion.message_validation import (
     validate_world_snapshot,
 )
 from backend.ingestion.world_state_store import StorageUnavailable, WorldStateStore
+from backend.orchestration.conversation_manager import ActiveConversationProjection
 from backend.orchestration.router_handoff import RouterHandoff
 from backend.orchestration.routing_snapshot import build_routing_snapshot
 
@@ -45,10 +46,12 @@ class IntakeService:
     def __init__(
         self,
         store: WorldStateStore,
+        conversation: ActiveConversationProjection,
         handoff: RouterHandoff,
         max_snapshot_candidates: int,
     ) -> None:
         self._store = store
+        self._conversation = conversation
         self._handoff = handoff
         self._max_snapshot_candidates = max_snapshot_candidates
 
@@ -63,10 +66,10 @@ class IntakeService:
         except MessageValidationError as invalid:
             return IntakeResult(IntakeOutcome.INVALID, str(invalid))
 
-        if len(snapshot.candidates) > self._max_snapshot_candidates:
+        if len(snapshot.npcs) > self._max_snapshot_candidates:
             return IntakeResult(
                 IntakeOutcome.INVALID,
-                f"candidates: at most {self._max_snapshot_candidates} candidates per snapshot",
+                f"npcs: at most {self._max_snapshot_candidates} candidates per snapshot",
             )
 
         try:
@@ -80,5 +83,7 @@ class IntakeService:
                 f"sequence {snapshot.sequence} does not supersede retained state",
             )
 
-        self._handoff.submit(build_routing_snapshot(snapshot))
+        self._handoff.submit(
+            build_routing_snapshot(snapshot, self._conversation.observe(snapshot))
+        )
         return IntakeResult(IntakeOutcome.APPLIED)

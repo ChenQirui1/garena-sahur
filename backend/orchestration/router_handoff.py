@@ -11,9 +11,12 @@ from dataclasses import dataclass
 from enum import StrEnum
 
 from backend.orchestration.router_port import (
+    RESULT_SCHEMA_VERSION,
+    RESULT_TYPE,
     AttentionTier,
     RouterPort,
     RoutingAssignment,
+    RoutingResult,
     RoutingSnapshot,
 )
 
@@ -24,6 +27,7 @@ class RoutingStatus(StrEnum):
     ROUTED = "routed"
     ROUTER_FAILED = "router_failed"
     INVALID_RESULT = "invalid_result"
+    STALE_RESULT = "stale_result"
 
 
 @dataclass(frozen=True, slots=True)
@@ -32,7 +36,7 @@ class RoutingOutcome:
 
     session_id: str
     world_id: str
-    source_sequence: int
+    sequence: int
     status: RoutingStatus
     assignments: tuple[RoutingAssignment, ...] = ()
     failure_reason: str | None = None
@@ -73,7 +77,7 @@ class RouterHandoff:
         """Queue routing work, superseding any older snapshot still waiting."""
         key = (snapshot.session_id, snapshot.world_id)
         waiting = self._pending.get(key)
-        if waiting is None or waiting.source_sequence < snapshot.source_sequence:
+        if waiting is None or waiting.sequence < snapshot.sequence:
             self._pending[key] = snapshot
         self._idle.clear()
         self._submitted.set()
@@ -95,12 +99,17 @@ class RouterHandoff:
 
     def _route(self, snapshot: RoutingSnapshot) -> RoutingOutcome:
         try:
-            assignments = self._router.route(snapshot)
+            result = self._router.route(snapshot)
         except Exception as failure:
             logger.exception("router call failed for session %s", snapshot.session_id)
             return self._failed(snapshot, RoutingStatus.ROUTER_FAILED, repr(failure))
 
-        rejection = _reject_reason(assignments, snapshot)
+        if isinstance(result, RoutingResult) and result.sequence != snapshot.sequence:
+            reason = f"result answers sequence {result.sequence}, not {snapshot.sequence}"
+            logger.warning("discarding a stale router result: %s", reason)
+            return self._failed(snapshot, RoutingStatus.STALE_RESULT, reason)
+
+        rejection = _reject_reason(result, snapshot)
         if rejection is not None:
             logger.error("router returned an invalid result: %s", rejection)
             return self._failed(snapshot, RoutingStatus.INVALID_RESULT, rejection)
@@ -108,9 +117,9 @@ class RouterHandoff:
         return RoutingOutcome(
             session_id=snapshot.session_id,
             world_id=snapshot.world_id,
-            source_sequence=snapshot.source_sequence,
+            sequence=snapshot.sequence,
             status=RoutingStatus.ROUTED,
-            assignments=tuple(assignments),
+            assignments=tuple(result.assignments),
         )
 
     @staticmethod
@@ -120,20 +129,28 @@ class RouterHandoff:
         return RoutingOutcome(
             session_id=snapshot.session_id,
             world_id=snapshot.world_id,
-            source_sequence=snapshot.source_sequence,
+            sequence=snapshot.sequence,
             status=status,
             failure_reason=reason,
         )
 
 
-def _reject_reason(assignments: object, snapshot: RoutingSnapshot) -> str | None:
+def _reject_reason(result: object, snapshot: RoutingSnapshot) -> str | None:
     """Describe why a Router result cannot be trusted, or ``None`` when it can."""
-    if not isinstance(assignments, (list, tuple)):
-        return "result is not a sequence of assignments"
+    if not isinstance(result, RoutingResult):
+        return "result is not a routing result"
+    if result.schema_version != RESULT_SCHEMA_VERSION:
+        return f"unsupported result schema_version {result.schema_version!r}"
+    if result.result_type != RESULT_TYPE:
+        return f"unexpected result_type {result.result_type!r}"
+    if (result.session_id, result.world_id) != (snapshot.session_id, snapshot.world_id):
+        return "result answers another session or world"
+    if not isinstance(result.assignments, (list, tuple)):
+        return "assignments is not a sequence"
 
-    candidate_ids = {candidate.npc_id for candidate in snapshot.candidates}
+    candidate_ids = {npc.npc_id for npc in snapshot.npcs}
     assigned: set[str] = set()
-    for assignment in assignments:
+    for assignment in result.assignments:
         if not isinstance(assignment, RoutingAssignment):
             return "result contains a value that is not a routing assignment"
         if not isinstance(assignment.tier, AttentionTier):
