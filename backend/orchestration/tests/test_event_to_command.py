@@ -77,13 +77,44 @@ async def test_an_identical_redelivery_is_idempotent(harness: Harness) -> None:
     assert second.json()["outcome"] == "duplicate"
 
 
-async def test_a_conflicting_duplicate_revision_is_rejected(harness: Harness) -> None:
+async def test_a_redelivery_that_changed_its_content_is_rejected(harness: Harness) -> None:
+    """Same delivery, different story: the publisher cannot rewrite a revision in place."""
     await seed(harness)
     await harness.event()
     conflicting = await harness.event(event_type="market_brawl")
 
     assert conflicting.status_code == 422
     assert "conflict" in (conflicting.json()["detail"] or "")
+
+
+async def test_a_second_delivery_of_the_same_revision_is_rejected(harness: Harness) -> None:
+    """A fresh delivery cannot re-open a revision the chain already settled."""
+    await seed(harness)
+    await harness.event()
+    resent = await harness.event(message_id="event-message-001-again", event_type="market_brawl")
+
+    assert resent.status_code == 422
+    assert "conflicts with the revision already stored" in (resent.json()["detail"] or "")
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("event_revision", 0),
+        ("status", "paused"),
+        ("position", None),
+        ("schema_version", "2.0"),
+    ],
+)
+async def test_an_invalid_event_is_rejected_before_it_is_stored(
+    harness: Harness, field: str, value: object
+) -> None:
+    await seed(harness)
+    response = await harness.ingest("game.event", game_event() | {field: value})
+
+    assert response.status_code == 422
+    assert await harness.pipeline.intake.events.active(SESSION_ID) == ()
+    assert harness.publisher.published == []
 
 
 async def test_a_delivery_identity_reused_for_other_content_is_rejected(
@@ -195,18 +226,27 @@ async def test_an_npc_holding_several_roles_takes_the_strongest(harness: Harness
 
 
 async def test_relevance_is_the_maximum_across_active_events(harness: Harness) -> None:
-    """A witness to one event and a responder to another reports the responder's 0.8."""
     await seed(harness)
     await harness.event()
+    assert harness.routed_npc(BYSTANDER).event_relevance == 0.0
+
     await harness.event(
         event_id="stall-fire-002",
         message_id="event-message-002",
         actor_npc_ids=[],
         target_npc_ids=[],
-        responder_npc_ids=[GUARD],
+        responder_npc_ids=[BYSTANDER],
     )
 
-    assert harness.routed_npc(GUARD).event_relevance == 0.8
+    # A role held in only the second event still counts, so aggregation spans both.
+    assert harness.routed_npc(BYSTANDER).event_roles == ["responder"]
+    assert harness.routed_npc(BYSTANDER).event_relevance == 0.8
+
+    # The shopkeeper is the theft's target and merely nearby the fire: the strongest wins.
+    shopkeeper = harness.routed_npc(SHOPKEEPER)
+    assert shopkeeper.event_roles == ["target", "witness"]
+    assert shopkeeper.event_relevance == 1.0
+
     assert harness.routed[-1].active_event_ids == [EVENT_ID, "stall-fire-002"]
 
 
@@ -296,6 +336,25 @@ async def test_a_later_revision_does_not_reopen_the_witness_set(harness: Harness
     assert harness.routed_npc(onlooker).event_roles == ["witness"]
 
 
+async def test_the_witness_radius_is_twelve_blocks(harness: Harness) -> None:
+    """Pins the boundary itself, either side of it, measured from the event position."""
+    inside, outside = "inside-uuid", "outside-uuid"
+    await harness.snapshot(
+        npcs=[
+            *crowd(),
+            npc(inside, position={"x": 104.2 + 11.9, "y": 64.0, "z": -31.8}),
+            npc(outside, position={"x": 104.2 + 12.1, "y": 64.0, "z": -31.8}),
+        ],
+        candidate_count=6,
+    )
+    await harness.event()
+
+    assert harness.routed_npc(inside).event_roles == ["witness"]
+    assert harness.routed_npc(inside).event_relevance == 0.4
+    assert harness.routed_npc(outside).event_roles == ["nearby"]
+    assert harness.routed_npc(outside).event_relevance == 0.2
+
+
 async def test_the_nearby_band_is_configurable(tmp_path: Path) -> None:
     """Shrinking the band below the guard's distance leaves an unrelated NPC unrelated."""
     settings = settings_for(tmp_path, nearby_radius_blocks=5.0)
@@ -346,6 +405,21 @@ async def test_interaction_recency_decays_once_the_conversation_is_over(
     await harness.settle()
 
     assert harness.routed_npc(SHOPKEEPER).interaction_recency == expected
+
+
+async def test_recency_ignores_a_wall_clock_correction(harness: Harness) -> None:
+    """Recency compares stamps only with each other, so NTP must not age an interaction."""
+    await harness.snapshot(
+        npcs=crowd(), candidate_count=4, active_conversation=active_conversation()
+    )
+    await harness.turn()
+
+    harness.clock.advance(1_000)
+    harness.clock.correct(60_000)
+    await harness.snapshot(sequence=1843, npcs=crowd(), candidate_count=4)
+    await harness.settle()
+
+    assert harness.routed_npc(SHOPKEEPER).interaction_recency == 0.9
 
 
 async def test_an_npc_the_player_never_addressed_has_no_recency(harness: Harness) -> None:

@@ -36,6 +36,10 @@ class ManualClock:
         self._now_ms += milliseconds
         self._monotonic_ms += milliseconds
 
+    def correct(self, milliseconds: int) -> None:
+        """Jump the wall clock alone, the way NTP does. Monotonic time cannot be corrected."""
+        self._now_ms += milliseconds
+
 
 class RecordingPublisher:
     """Records every published command and what the store held at publication time."""
