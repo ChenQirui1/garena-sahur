@@ -47,6 +47,19 @@ class CommandStore:
         )
         await connection.commit()
 
+    async def latest_for(self, session_id: str, npc_id: str) -> BehaviourCommand | None:
+        """The newest command issued for one NPC, which is the behaviour that can expire."""
+        rows = list(
+            await self._store.connection.execute_fetchall(
+                "SELECT payload FROM behaviour_commands WHERE session_id = ? AND npc_id = ?"
+                " ORDER BY command_sequence DESC LIMIT 1",
+                (session_id, npc_id),
+            )
+        )
+        if not rows:
+            return None
+        return _from_payload(json.loads(rows[0][0]))
+
     async def stored(self, command_id: str) -> BehaviourCommand | None:
         rows = list(
             await self._store.connection.execute_fetchall(

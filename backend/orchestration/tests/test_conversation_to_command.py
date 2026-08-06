@@ -46,6 +46,7 @@ async def test_an_active_conversation_and_one_turn_produce_one_command(
 ) -> None:
     await harness.snapshot(active_conversation=active_conversation())
     response = await harness.turn()
+    await harness.settle()
 
     assert response.status_code == 202
     assert len(harness.publisher.published) == 1
@@ -67,6 +68,7 @@ async def test_an_active_conversation_and_one_turn_produce_one_command(
 async def test_the_command_is_stored_before_it_is_published(harness: Harness) -> None:
     await harness.snapshot(active_conversation=active_conversation())
     await harness.turn()
+    await harness.settle()
 
     assert harness.publisher.stored_when_published == [harness.publisher.published[0]]
 
@@ -80,6 +82,7 @@ async def test_the_conversation_reaches_ready_through_the_specified_states(
     await harness.snapshot(active_conversation=active_conversation())
     observed.append(harness.state())
     await harness.turn()
+    await harness.settle()
     observed.append(harness.state())
 
     assert observed == [
@@ -97,6 +100,7 @@ async def test_a_duplicate_turn_produces_no_second_command_or_model_call(
     first = await harness.turn()
     second = await harness.turn()
     third = await harness.turn()
+    await harness.settle()
 
     assert first.status_code == 202
     assert second.status_code == third.status_code == 200
@@ -110,6 +114,7 @@ async def test_an_ambient_target_never_reaches_a_provider(tmp_path: Path) -> Non
     async for ambient in running(settings_for(tmp_path), AmbientOnlyRouter()):
         await ambient.snapshot(active_conversation=active_conversation())
         await ambient.turn()
+        await ambient.settle()
 
         assert ambient.publisher.published == []
         assert ambient.telemetry.model_calls == []
@@ -131,8 +136,11 @@ async def test_a_turn_that_reaches_generation_twice_still_yields_one_command(
     await harness.snapshot(active_conversation=active_conversation())
     await harness.turn()
 
+    await harness.settle()
+
     turn = validate_conversation_turn(conversation_turn())
     await harness.pipeline.generation.on_triggered_turn(turn)
+    await harness.settle()
 
     assert len(harness.publisher.published) == 1
     assert len(harness.telemetry.model_calls) == 1
@@ -153,6 +161,7 @@ async def test_each_command_for_one_npc_takes_the_next_command_sequence(
     await harness.turn(turn_id="turn-004", turn_index=4)
     await harness.turn(turn_id="turn-005", turn_index=5)
     await harness.turn(turn_id="turn-006", turn_index=6)
+    await harness.settle()
 
     assert [command.command_sequence for command in harness.publisher.published] == [1, 2, 3]
     assert len({command.command_id for command in harness.publisher.published}) == 3
@@ -164,6 +173,7 @@ async def test_a_turn_the_player_did_not_speak_is_stored_but_generates_nothing(
     """Specification #1 allows generation for an accepted player turn (#2 owns the enum)."""
     await harness.snapshot(active_conversation=active_conversation())
     response = await harness.turn(speaker_type="npc", speaker_id=SHOPKEEPER)
+    await harness.settle()
 
     assert response.status_code == 202
     assert harness.publisher.published == []
@@ -179,10 +189,12 @@ async def test_a_turn_before_its_snapshot_waits_and_then_produces_one_command(
 ) -> None:
     await harness.snapshot(sequence=1841)
     await harness.turn()
+    await harness.settle()
 
     assert harness.publisher.published == []
 
     await harness.snapshot(sequence=1842, active_conversation=active_conversation())
+    await harness.settle()
 
     assert len(harness.publisher.published) == 1
     assert harness.publisher.published[0].source_sequence == 1842
@@ -194,6 +206,7 @@ async def test_an_unconfirmed_turn_is_discarded_by_a_snapshot_that_does_not_matc
     await harness.snapshot(sequence=1841)
     await harness.turn()
     await harness.snapshot(sequence=1842)
+    await harness.settle()
 
     assert harness.publisher.published == []
     assert harness.observed(UNCONFIRMED_TURN_DISCARDED) == [
@@ -206,6 +219,7 @@ async def test_only_one_turn_waits_for_confirmation_at_a_time(harness: Harness) 
     await harness.turn(turn_id="turn-004", turn_index=4)
     await harness.turn(turn_id="turn-005", turn_index=5)
     await harness.snapshot(sequence=1842, active_conversation=active_conversation())
+    await harness.settle()
 
     assert [command.turn_id for command in harness.publisher.published] == ["turn-005"]
     assert harness.observed(UNCONFIRMED_TURN_DISCARDED) == [
@@ -217,12 +231,15 @@ async def test_the_world_snapshot_alone_opens_and_closes_the_conversation(
     harness: Harness,
 ) -> None:
     await harness.turn()
+    await harness.settle()
     assert harness.state() is ConversationState.IDLE
 
     await harness.snapshot(sequence=1843, active_conversation=active_conversation())
+    await harness.settle()
     assert harness.state() is ConversationState.READY
 
     await harness.snapshot(sequence=1844)
+    await harness.settle()
     assert harness.state() is ConversationState.IDLE
 
 
@@ -231,6 +248,7 @@ async def test_a_target_switch_starts_a_new_conversation_and_retains_the_old_his
 ) -> None:
     await harness.snapshot(sequence=1842, active_conversation=active_conversation())
     await harness.turn()
+    await harness.settle()
     await harness.snapshot(
         sequence=1843,
         active_conversation={"conversation_id": "conversation-08", "target_npc_id": THIEF},
@@ -241,6 +259,7 @@ async def test_a_target_switch_starts_a_new_conversation_and_retains_the_old_his
         turn_index=0,
         target_npc_id=THIEF,
     )
+    await harness.settle()
 
     published = harness.publisher.published
     assert [command.conversation_id for command in published] == [
@@ -256,6 +275,7 @@ async def test_the_router_sees_the_conversation_projection_and_its_latest_turn(
 ) -> None:
     await harness.snapshot(active_conversation=active_conversation())
     await harness.turn()
+    await harness.settle()
 
     routed = harness.routed[-1].active_conversation
     assert routed is not None
@@ -270,6 +290,7 @@ async def test_one_model_call_fact_is_emitted_for_the_generated_command(
 ) -> None:
     await harness.snapshot(active_conversation=active_conversation())
     await harness.turn()
+    await harness.settle()
 
     fact = harness.telemetry.model_calls[0].as_record()
     command = harness.publisher.published[0]
@@ -310,6 +331,7 @@ async def test_an_unknown_npc_uses_a_generic_profile_and_records_the_gap(
     async for harness in running(settings_for(tmp_path, WITHOUT_THE_SHOPKEEPER)):
         await harness.snapshot(active_conversation=active_conversation())
         await harness.turn()
+        await harness.settle()
 
         assert len(harness.publisher.published) == 1
         assert harness.observed(MISSING_PROFILE) == [{"npc_id": SHOPKEEPER}]

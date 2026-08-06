@@ -1,11 +1,15 @@
-"""Carry one armed conversation turn from routing to a published behaviour command.
+"""Decide what is worth generating, and carry one accepted piece of work to a command.
 
 Owner: Jerome & Richard
 
-This is the seam the pipeline's stages meet at: routing decides the tier, policy decides
-whether to generate, the claim makes it happen at most once, context and the gateway produce
-the behaviour, and publication commits it before sending. Nothing here decides a tier, and
-nothing here retries a model call.
+This is the seam the pipeline's stages meet at: routing decides the tier, policy decides whether
+to generate, the scheduler decides when, context and the gateway produce the behaviour, and
+publication commits it before sending. Nothing here decides a tier, decides when work runs, or
+retries a model call.
+
+Every trigger arrives at one of the three `on_` methods and leaves as queued work. The scheduler
+calls back through `is_current`, `generate`, and `publish`, so the rules for "is this still worth
+doing" live beside the stores that can answer the question.
 """
 
 from __future__ import annotations
@@ -16,6 +20,7 @@ from backend.context.context_builder import ContextBuilder, GenerationContext
 from backend.ingestion.durable_store import StorageUnavailable
 from backend.ingestion.event_store import EventStore
 from backend.ingestion.message_validation import ConversationTurn, GameEvent, WorldSnapshot
+from backend.ingestion.turn_store import TurnStore
 from backend.ingestion.world_state_store import WorldStateStore
 from backend.models.model_gateway import (
     GeneratedBehaviour,
@@ -30,14 +35,21 @@ from backend.orchestration.behaviour_publisher import BehaviourPublisher
 from backend.orchestration.clock import Clock
 from backend.orchestration.command_store import CommandStore
 from backend.orchestration.conversation_manager import ConversationManager
-from backend.orchestration.deduplication import GenerationClaims
 from backend.orchestration.event_relevance import EventRadii, ordered_roles, roles_in
 from backend.orchestration.generation_policy import (
-    EventGeneration,
-    TurnGeneration,
+    GENERATING_TIERS,
+    CurrentFacts,
+    Focus,
+    Generation,
+    PolicyDecision,
+    Trigger,
     decide_for_event,
+    decide_for_expiry,
+    decide_for_promotion,
     decide_for_turn,
+    is_still_current,
 )
+from backend.orchestration.generation_scheduler import GenerationScheduler
 from backend.orchestration.observations import (
     COMMAND_NOT_PUBLISHED,
     EVENT_GENERATION_SUPPRESSED,
@@ -45,9 +57,10 @@ from backend.orchestration.observations import (
     MISSING_PROFILE,
     MODEL_CALL_FAILED,
     NO_WORLD_STATE,
+    TRIGGER_SUPPRESSED,
     Observations,
 )
-from backend.orchestration.router_handoff import RouterHandoff, RoutingOutcome
+from backend.orchestration.router_handoff import RouterHandoff, RoutingOutcome, RoutingStatus
 from backend.orchestration.router_port import AttentionTier
 from backend.orchestration.routing_snapshot import RoutingSnapshots
 from backend.orchestration.telemetry_port import (
@@ -59,27 +72,14 @@ from backend.orchestration.telemetry_port import (
 
 
 @dataclass(frozen=True, slots=True)
-class _Attempt:
-    """What one provider attempt left behind.
-
-    Exactly one of these holds: a command was published, nothing usable was produced, or a
-    command existed but could not be delivered. The third is not a suppression — the model call
-    was spent and the failure is already recorded — so the caller treats it differently.
-    """
-
-    command: BehaviourCommand | None = None
-    suppressed: str | None = None
-    undeliverable: bool = False
-
-
-@dataclass(frozen=True, slots=True)
 class GenerationCoordinator:
     world_state: WorldStateStore
     events: EventStore
+    turns: TurnStore
     conversation: ConversationManager
     handoff: RouterHandoff
     routing_snapshots: RoutingSnapshots
-    claims: GenerationClaims
+    scheduler: GenerationScheduler
     context: ContextBuilder
     gateway: ModelGateway
     commands: CommandStore
@@ -90,8 +90,10 @@ class GenerationCoordinator:
     radii: EventRadii
     command_lifetime_ms: int
 
+    # ---- triggers -----------------------------------------------------------------
+
     async def on_triggered_turn(self, turn: ConversationTurn) -> None:
-        """Route the current world state for this turn and generate at most one command."""
+        """Route the current world state for this turn and queue at most one generation."""
         snapshot = self.world_state.latest_for_session(turn.session_id)
         if snapshot is None:
             self.observations.note(
@@ -103,34 +105,26 @@ class GenerationCoordinator:
         try:
             outcome = await self._route(turn.session_id, snapshot)
         except StorageUnavailable as unavailable:
-            self._suppress(turn, f"routing state is unavailable: {unavailable}")
+            self._suppress_turn(turn, f"routing state is unavailable: {unavailable}")
             return
 
         decision = decide_for_turn(turn, outcome)
         if decision.generation is None:
-            self._suppress(turn, str(decision.suppressed))
+            self._suppress_turn(turn, str(decision.suppressed))
             return
 
-        generation = decision.generation
-        if not await self.claims.claim(generation.claim_key, self.clock.now_ms()):
-            self._suppress(turn, "generation was already claimed")
-            return
-
-        attempt = await self._attempt(generation, snapshot)
-        if attempt.command is not None:
-            self.conversation.note_published(turn.session_id)
-        elif attempt.suppressed is not None:
-            self._suppress(turn, attempt.suppressed)
-        else:
-            self.conversation.note_not_generated(turn.session_id)
+        self.scheduler.submit(decision.generation)
 
     async def on_event_revision(self, event: GameEvent) -> None:
-        """Route the current world state for this revision and react once per eligible NPC.
+        """Queue a reaction for each eligible NPC, or invalidate what this revision ends."""
+        if event.is_terminal:
+            # The revision that ends an event also ends every reaction still waiting for it.
+            self.scheduler.cancel(
+                lambda work: work.event is not None
+                and (work.session_id, work.event.event_id) == (event.session_id, event.event_id),
+                f"event {event.status}",
+            )
 
-        Every NPC with a part in this event is considered, in candidate order, so the same
-        revision against the same world state always produces the same commands in the same
-        order. Bounding how many run at once is issue #8.
-        """
         snapshot = self.world_state.latest_for_session(event.session_id)
         if snapshot is None:
             self.observations.note(
@@ -145,29 +139,172 @@ class GenerationCoordinator:
         except StorageUnavailable as unavailable:
             # The revision is committed and acknowledged; only the reaction is lost, and a
             # later revision can still produce one.
-            self.observations.note(
-                EVENT_GENERATION_SUPPRESSED,
-                session_id=event.session_id,
-                event_id=event.event_id,
-                event_revision=event.event_revision,
-                npc_id=None,
-                reason=f"routing state is unavailable: {unavailable}",
+            self._suppress_event(
+                event, None, f"routing state is unavailable: {unavailable}"
             )
             return
 
         decision = decide_for_event(event, outcome, roles_by_npc)
         for npc_id, reason in decision.suppressed:
             self._suppress_event(event, npc_id, reason)
-
         for generation in decision.generations:
-            if not await self.claims.claim(generation.claim_key, self.clock.now_ms()):
-                self._suppress_event(
-                    event, generation.npc_id, "generation was already claimed"
-                )
+            self.scheduler.submit(generation)
+
+    async def on_routing_outcome(self, outcome: RoutingOutcome) -> None:
+        """React to a refreshed set of assignments: cancel what fell out, queue what rose.
+
+        This is where promotion and expiry are noticed. The snapshot behind the outcome is the
+        tick, never the trigger — an unchanged assignment and an unexpired command both leave
+        with nothing queued.
+        """
+        if outcome.status is not RoutingStatus.ROUTED:
+            return
+
+        generating = {
+            one.npc_id for one in outcome.assignments if one.tier in GENERATING_TIERS
+        }
+        self.scheduler.cancel(
+            lambda work: work.session_id == outcome.session_id
+            and work.npc_id not in generating,
+            "npc no longer holds a generating tier",
+        )
+
+        now_ms = self.clock.now_ms()
+        for assignment in outcome.assignments:
+            if assignment.tier not in GENERATING_TIERS:
                 continue
-            attempt = await self._attempt(generation, snapshot)
-            if attempt.suppressed is not None:
-                self._suppress_event(event, generation.npc_id, attempt.suppressed)
+            focus = await self._focus_for(outcome.session_id, assignment.npc_id)
+            behaviour = await self.commands.latest_for(outcome.session_id, assignment.npc_id)
+            promotion = decide_for_promotion(assignment, outcome, focus, behaviour, now_ms)
+            if self._acted_on(promotion, outcome.session_id, assignment.npc_id, "promotion"):
+                continue
+            expiry = decide_for_expiry(assignment, outcome, focus, behaviour, now_ms)
+            self._acted_on(expiry, outcome.session_id, assignment.npc_id, "expiry")
+
+    def _acted_on(
+        self, decision: PolicyDecision, session_id: str, npc_id: str, trigger: str
+    ) -> bool:
+        """Queue what the decision produced, or say why an eligible trigger produced nothing.
+
+        A decision that is neither is the ordinary case — most candidates are neither promoted
+        nor expired on any given snapshot — and reporting it would drown the record.
+        """
+        if decision.generation is not None:
+            self.scheduler.submit(decision.generation)
+            return True
+        if decision.suppressed is not None:
+            self.observations.note(
+                TRIGGER_SUPPRESSED,
+                session_id=session_id,
+                npc_id=npc_id,
+                trigger=trigger,
+                reason=decision.suppressed,
+            )
+            return True
+        return False
+
+    # ---- executor -----------------------------------------------------------------
+
+    async def is_current(self, work: Generation) -> str | None:
+        """Gather what the stores say about this work, and let policy judge it."""
+        outcome = self.handoff.latest_outcome(work.session_id, work.world_id)
+        routed = outcome is not None and outcome.status is RoutingStatus.ROUTED
+        stored = (
+            await self.events.latest(work.session_id, work.event.event_id)
+            if routed and work.event is not None
+            else None
+        )
+        return is_still_current(
+            work,
+            CurrentFacts(
+                routed=routed,
+                assignment=(
+                    next(
+                        (one for one in outcome.assignments if one.npc_id == work.npc_id),
+                        None,
+                    )
+                    if routed and outcome is not None
+                    else None
+                ),
+                stored_event=stored.event if stored is not None else None,
+                latest_behaviour=(
+                    await self.commands.latest_for(work.session_id, work.npc_id)
+                    if routed and work.trigger is Trigger.EXPIRY
+                    else None
+                ),
+            ),
+        )
+
+    async def generate(self, work: Generation) -> BehaviourCommand | None:
+        """Call the provider once and turn what comes back into a command. Never publishes."""
+        snapshot = self.world_state.latest_for_session(work.session_id)
+        if snapshot is None:
+            self.observations.note(
+                NO_WORLD_STATE, session_id=work.session_id, npc_id=work.npc_id
+            )
+            return None
+
+        request = await self._request_for(work, snapshot)
+        started_at_ms = self.clock.now_ms()
+        try:
+            behaviour = await self.gateway.generate(request)
+        except NoProviderForTier as misrouted:
+            # Nothing was attempted, so there is no model call to report.
+            self.observations.note(
+                MODEL_CALL_FAILED, request_id=request.request_id, reason=repr(misrouted)
+            )
+            return None
+        except Exception as failure:
+            self._record_failure(request, started_at_ms, failure)
+            return None
+
+        self.telemetry.record_model_call(
+            _fact(request, behaviour, started_at_ms, self.clock.now_ms())
+        )
+        return await self._command(request, behaviour)
+
+    async def publish(self, work: Generation, command: BehaviourCommand) -> None:
+        """Commit and send one command, and let an answered conversation move on."""
+        try:
+            await self.publisher.publish(command)
+        except Exception as undeliverable:
+            # The model call is spent either way, but the conversation must not be left
+            # waiting for a command that will never arrive.
+            self.observations.note(
+                COMMAND_NOT_PUBLISHED,
+                request_id=command.request_id,
+                reason=repr(undeliverable),
+            )
+            if work.trigger is Trigger.TURN:
+                self.conversation.note_not_generated(work.session_id)
+            return
+
+        if work.trigger is Trigger.TURN:
+            self.conversation.note_published(work.session_id)
+
+    def abandon(self, work: Generation, reason: str) -> None:
+        if work.trigger is Trigger.TURN and work.turn is not None:
+            self.observations.note(
+                GENERATION_SUPPRESSED,
+                session_id=work.session_id,
+                turn_id=work.turn.turn_id,
+                npc_id=work.npc_id,
+                reason=reason,
+            )
+            return
+        self.observations.note(
+            EVENT_GENERATION_SUPPRESSED,
+            session_id=work.session_id,
+            event_id=work.event.event_id if work.event else None,
+            event_revision=work.event.event_revision if work.event else None,
+            npc_id=work.npc_id,
+            reason=reason,
+        )
+
+    def note_turn_not_generated(self, session_id: str) -> None:
+        self.conversation.note_not_generated(session_id)
+
+    # ---- internals ----------------------------------------------------------------
 
     async def _route(self, session_id: str, snapshot: WorldSnapshot) -> RoutingOutcome:
         """Route this world state now, because the decision below needs its tiers."""
@@ -176,6 +313,32 @@ class GenerationCoordinator:
                 snapshot, self.conversation.projection(session_id)
             )
         )
+
+    async def _focus_for(self, session_id: str, npc_id: str) -> Focus:
+        """What still requires foreground behaviour from this NPC, if anything does.
+
+        The active conversation comes first: a player waiting on an answer outranks scenery.
+        """
+        active = self.conversation.active_conversation(session_id)
+        if active is not None and active.target_npc_id == npc_id:
+            turn = await self.turns.latest_player_turn(session_id, active.conversation_id)
+            if turn is not None:
+                return Focus(turn=turn)
+
+        snapshot = self.world_state.latest_for_session(session_id)
+        if snapshot is None:
+            return Focus()
+        observed = next((one for one in snapshot.npcs if one.npc_id == npc_id), None)
+        if observed is None:
+            return Focus()
+
+        for stored in await self.events.active(session_id):
+            roles = ordered_roles(
+                roles_in(npc_id, observed.position, stored, self.radii)
+            )
+            if roles:
+                return Focus(event=stored.event, roles=roles)
+        return Focus()
 
     async def _roles_by_npc(
         self, event: GameEvent, snapshot: WorldSnapshot
@@ -192,122 +355,69 @@ class GenerationCoordinator:
         }
         return {npc_id: held for npc_id, held in roles.items() if held}
 
-    async def _attempt(
-        self, generation: TurnGeneration | EventGeneration, snapshot: WorldSnapshot
-    ) -> _Attempt:
-        """Build context, call the provider once, and publish what comes back."""
-        request = await self._request_for(generation, snapshot)
-        started_at_ms = self.clock.now_ms()
-        try:
-            behaviour = await self.gateway.generate(request)
-        except NoProviderForTier as misrouted:
-            # Nothing was attempted, so there is no model call to report.
-            return _Attempt(suppressed=repr(misrouted))
-        except Exception as failure:
-            self._record_failure(request, started_at_ms, failure)
-            return _Attempt(suppressed="the provider produced nothing usable")
-
-        self.telemetry.record_model_call(
-            _fact(request, behaviour, started_at_ms, self.clock.now_ms())
-        )
-        command = await self._command(request, behaviour)
-        try:
-            await self.publisher.publish(command)
-        except Exception as undeliverable:
-            # The model call is spent either way, but the caller must not be left waiting for
-            # a command that will never arrive.
-            self.observations.note(
-                COMMAND_NOT_PUBLISHED,
-                request_id=request.request_id,
-                reason=repr(undeliverable),
-            )
-            return _Attempt(undeliverable=True)
-
-        return _Attempt(command=command)
-
     async def _request_for(
-        self, generation: TurnGeneration | EventGeneration, snapshot: WorldSnapshot
+        self, work: Generation, snapshot: WorldSnapshot
     ) -> GenerationRequest:
-        """The one place the two triggers differ in what they ask the provider for."""
-        if isinstance(generation, TurnGeneration):
-            context = await self.context.build(generation.tier, generation.turn, snapshot)
-            self._note_unknown_profile(context, generation.turn.target_npc_id)
-            return self._turn_request(generation, context)
+        """Conversation work answers a turn; everything else reacts to an event."""
+        if work.turn is not None:
+            context = await self.context.build(work.tier, work.turn, snapshot)
+            self._note_unknown_profile(context, work.npc_id)
+            return self._request(
+                work,
+                context,
+                conversation_id=work.turn.conversation_id,
+                turn_id=work.turn.turn_id,
+                event_id=None,
+            )
 
+        assert work.event is not None, "generation work carries a turn or an event"
         context = await self.context.build_for_event(
-            generation.tier,
-            generation.event,
-            generation.npc_id,
-            generation.roles,
-            snapshot,
+            work.tier, work.event, work.npc_id, work.roles, snapshot
         )
-        self._note_unknown_profile(context, generation.npc_id)
-        return self._event_request(generation, context)
+        self._note_unknown_profile(context, work.npc_id)
+        return self._request(
+            work,
+            context,
+            conversation_id=None,
+            turn_id=None,
+            event_id=work.event.event_id,
+        )
 
     def _note_unknown_profile(self, context: GenerationContext, npc_id: str) -> None:
         if not context.npc.authored:
             self.observations.note(MISSING_PROFILE, npc_id=npc_id)
 
-    def _turn_request(
-        self, generation: TurnGeneration, context: GenerationContext
-    ) -> GenerationRequest:
-        turn = generation.turn
-        return self._request(
-            generation.tier,
-            context,
-            session_id=turn.session_id,
-            npc_id=turn.target_npc_id,
-            trigger=(turn.conversation_id, turn.turn_id),
-            conversation_id=turn.conversation_id,
-            turn_id=turn.turn_id,
-            event_id=None,
-            source_sequence=generation.source_sequence,
-        )
-
-    def _event_request(
-        self, generation: EventGeneration, context: GenerationContext
-    ) -> GenerationRequest:
-        event = generation.event
-        return self._request(
-            generation.tier,
-            context,
-            session_id=event.session_id,
-            npc_id=generation.npc_id,
-            trigger=(event.event_id, str(event.event_revision)),
-            conversation_id=None,
-            turn_id=None,
-            event_id=event.event_id,
-            source_sequence=generation.source_sequence,
-        )
-
     def _request(
         self,
-        tier: AttentionTier,
+        work: Generation,
         context: GenerationContext,
         *,
-        session_id: str,
-        npc_id: str,
-        trigger: tuple[str | None, str | None],
         conversation_id: str | None,
         turn_id: str | None,
         event_id: str | None,
-        source_sequence: int,
     ) -> GenerationRequest:
-        """``trigger`` is what makes this request distinct for this NPC in this session, so a
-        retry of the same work reuses the same identifiers and a new trigger never collides."""
+        """The claim key already says what makes this work distinct, so the request identity is
+        derived from it: a retry of the same work reuses it, and different work cannot collide.
+
+        Deriving it from the trigger's own identifiers instead is not enough. Two promotions of
+        the same NPC off the same event revision differ only by the snapshot that promoted them,
+        which appears in the claim key and nowhere else.
+        """
         render = (
-            render_focused_prompt if tier is AttentionTier.FOCUSED else render_reactive_prompt
+            render_focused_prompt
+            if work.tier is AttentionTier.FOCUSED
+            else render_reactive_prompt
         )
         return GenerationRequest(
-            request_id=f"request-{identity_digest(session_id, npc_id, *trigger)}",
-            session_id=session_id,
-            npc_id=npc_id,
+            request_id=f"request-{identity_digest(work.claim_key)}",
+            session_id=work.session_id,
+            npc_id=work.npc_id,
             npc_name=context.npc.name,
-            tier=tier,
+            tier=work.tier,
             conversation_id=conversation_id,
             turn_id=turn_id,
             event_id=event_id,
-            source_sequence=source_sequence,
+            source_sequence=work.source_sequence,
             prompt=render(context),
             trigger_text=context.trigger_text,
             estimated_input_tokens=context.estimated_input_tokens,
@@ -366,7 +476,7 @@ class GenerationCoordinator:
             )
         )
 
-    def _suppress(self, turn: ConversationTurn, reason: str) -> None:
+    def _suppress_turn(self, turn: ConversationTurn, reason: str) -> None:
         self.observations.note(
             GENERATION_SUPPRESSED,
             session_id=turn.session_id,
@@ -376,7 +486,7 @@ class GenerationCoordinator:
         )
         self.conversation.note_not_generated(turn.session_id)
 
-    def _suppress_event(self, event: GameEvent, npc_id: str, reason: str) -> None:
+    def _suppress_event(self, event: GameEvent, npc_id: str | None, reason: str) -> None:
         """An event suppression names the revision, because the next one may well generate."""
         self.observations.note(
             EVENT_GENERATION_SUPPRESSED,

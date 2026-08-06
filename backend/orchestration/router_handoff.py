@@ -9,6 +9,7 @@ import asyncio
 import logging
 from dataclasses import dataclass
 from enum import StrEnum
+from typing import Awaitable, Callable
 
 from backend.orchestration.router_port import (
     RESULT_SCHEMA_VERSION,
@@ -53,10 +54,23 @@ class RouterHandoff:
         self._idle = asyncio.Event()
         self._idle.set()
         self._worker: asyncio.Task[None] | None = None
+        self._listener: Callable[[RoutingOutcome], Awaitable[None]] | None = None
 
     @property
     def is_running(self) -> bool:
         return self._worker is not None and not self._worker.done()
+
+    @property
+    def is_idle(self) -> bool:
+        return self._idle.is_set()
+
+    def listen(self, listener: Callable[[RoutingOutcome], Awaitable[None]]) -> None:
+        """Notify ``listener`` of every refreshed outcome, after the worker produced it.
+
+        Only the coalesced snapshot path notifies: `route_now` exists because its caller already
+        has a trigger in hand and acts on the outcome itself.
+        """
+        self._listener = listener
 
     async def start(self) -> None:
         if self.is_running:
@@ -112,8 +126,25 @@ class RouterHandoff:
             self._submitted.clear()
             while self._pending:
                 key, snapshot = self._pending.popitem()
-                self._outcomes[key] = self._route(snapshot)
+                outcome = self._route(snapshot)
+                self._outcomes[key] = outcome
+                await self._notify(outcome)
             self._idle.set()
+
+    async def _notify(self, outcome: RoutingOutcome) -> None:
+        """Tell the listener, but never let it take the routing worker down with it.
+
+        A worker that dies stops setting `is_idle`, so everything waiting on routing would wait
+        for ever and the service would never report ready again.
+        """
+        if self._listener is None:
+            return
+        try:
+            await self._listener(outcome)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("routing listener failed for session %s", outcome.session_id)
 
     def _route(self, snapshot: RoutingSnapshot) -> RoutingOutcome:
         try:

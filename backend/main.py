@@ -22,7 +22,7 @@ from backend.ingestion.intake_service import IntakeService
 from backend.ingestion.turn_store import TurnStore
 from backend.ingestion.world_state_store import WorldStateStore
 from backend.models.mock_provider import MockProvider
-from backend.models.model_gateway import ModelGateway
+from backend.models.model_gateway import ModelGateway, Provider
 from backend.orchestration.behaviour_publisher import (
     BehaviourPublisher,
     LoggingPublisher,
@@ -35,6 +35,8 @@ from backend.orchestration.deduplication import GenerationClaims
 from backend.orchestration.development_router import AmbientOnlyRouter
 from backend.orchestration.event_relevance import EventRadii
 from backend.orchestration.generation_coordinator import GenerationCoordinator
+from backend.orchestration.generation_queue import GenerationQueue
+from backend.orchestration.generation_scheduler import GenerationScheduler
 from backend.orchestration.interaction_recency import InteractionRecency
 from backend.orchestration.observations import Observations
 from backend.orchestration.router_handoff import RouterHandoff
@@ -51,6 +53,7 @@ class Adapters:
     publisher: PublisherPort | None = None
     telemetry: TelemetryPort | None = None
     clock: Clock | None = None
+    provider: Provider | None = None
 
 
 @dataclass(frozen=True, slots=True)
@@ -59,6 +62,7 @@ class Pipeline:
 
     intake: IntakeService
     generation: GenerationCoordinator
+    scheduler: GenerationScheduler
     commands: CommandStore
     handoff: RouterHandoff
     store: DurableStore
@@ -68,7 +72,10 @@ class Pipeline:
     @property
     def is_ready(self) -> bool:
         return (
-            self.readiness_error is None and self.store.is_open and self.handoff.is_running
+            self.readiness_error is None
+            and self.store.is_open
+            and self.handoff.is_running
+            and self.scheduler.is_running
         )
 
 
@@ -84,7 +91,17 @@ def build_pipeline(settings: Settings, adapters: Adapters = Adapters()) -> Pipel
     conversation = ConversationManager()
     handoff = RouterHandoff(adapters.router or AmbientOnlyRouter())
     observations = Observations()
-    provider = MockProvider(settings.characters_per_token)
+    provider = adapters.provider or MockProvider(settings.characters_per_token)
+    scheduler = GenerationScheduler(
+        queue=GenerationQueue(
+            focused_limit=settings.focused_concurrency,
+            reactive_limit=settings.reactive_concurrency,
+            total_limit=settings.total_concurrency,
+        ),
+        claims=GenerationClaims(store),
+        observations=observations,
+        clock=clock,
+    )
     radii = EventRadii(
         witness_blocks=settings.witness_radius_blocks,
         nearby_blocks=settings.nearby_radius_blocks,
@@ -95,10 +112,11 @@ def build_pipeline(settings: Settings, adapters: Adapters = Adapters()) -> Pipel
     generation = GenerationCoordinator(
         world_state=world_state,
         events=events,
+        turns=turns,
         conversation=conversation,
         handoff=handoff,
         routing_snapshots=routing_snapshots,
-        claims=GenerationClaims(store),
+        scheduler=scheduler,
         context=ContextBuilder(
             profiles=profiles,
             history=ConversationHistory(turns),
@@ -123,6 +141,8 @@ def build_pipeline(settings: Settings, adapters: Adapters = Adapters()) -> Pipel
         radii=radii,
         command_lifetime_ms=settings.command_lifetime_ms,
     )
+    scheduler.bind(generation)
+    handoff.listen(generation.on_routing_outcome)
 
     return Pipeline(
         intake=IntakeService(
@@ -139,6 +159,7 @@ def build_pipeline(settings: Settings, adapters: Adapters = Adapters()) -> Pipel
             max_snapshot_candidates=settings.max_snapshot_candidates,
         ),
         generation=generation,
+        scheduler=scheduler,
         commands=commands,
         handoff=handoff,
         store=store,
@@ -155,9 +176,11 @@ def create_app(settings: Settings | None = None, adapters: Adapters = Adapters()
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
         await pipeline.store.open()
         await pipeline.handoff.start()
+        await pipeline.scheduler.start()
         try:
             yield
         finally:
+            await pipeline.scheduler.stop()
             await pipeline.handoff.stop()
             await pipeline.store.close()
 

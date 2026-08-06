@@ -26,6 +26,11 @@ NO_WORLD_STATE = "no_world_state"
 ROUTING_NOT_REFRESHED = "routing_not_refreshed"
 MODEL_CALL_FAILED = "model_call_failed"
 COMMAND_NOT_PUBLISHED = "command_not_published"
+WORK_SUPERSEDED = "work_superseded"
+WORK_CANCELLED = "work_cancelled"
+WORK_REFUSED = "work_refused"
+WORK_FAILED = "work_failed"
+TRIGGER_SUPPRESSED = "trigger_suppressed"
 
 
 @dataclass(frozen=True, slots=True)

@@ -99,6 +99,14 @@ class ConversationManager:
     def state(self, session_id: str) -> ConversationState:
         return self._session(session_id).state
 
+    def active_conversation(self, session_id: str) -> ActiveConversationRef | None:
+        """Minecraft's current view, whatever the orchestration state happens to be."""
+        return self._session(session_id).active
+
+    def latest_turn_id(self, session_id: str, conversation_id: str) -> str | None:
+        """The newest turn seen in one conversation, so older pending work can tell it is old."""
+        return self._latest_turn_id.get((session_id, conversation_id))
+
     def projection(self, session_id: str) -> ActiveConversation | None:
         """The router-facing conversation object, or ``None`` when the session is idle."""
         session = self._session(session_id)

@@ -8,11 +8,21 @@ Elson & Daniel's telemetry aggregation are separate integration gates.
 
 from __future__ import annotations
 
+import asyncio
+from collections import Counter
 from typing import Callable
 
+from backend.models.model_gateway import GeneratedBehaviour, GenerationRequest, Provider
 from backend.orchestration.behaviour_command import BehaviourCommand
 from backend.orchestration.command_store import CommandStore
+from backend.orchestration.router_port import AttentionTier
 from backend.orchestration.telemetry_port import ModelCallFact
+
+# Waiting for the pipeline to do what it is going to do. Durable reads cross a real thread, so
+# a bare `sleep(0)` is not enough to let them land.
+TICK_SECONDS = 0.002
+WAIT_TICKS = 500
+SETTLE_TICKS = 25
 
 
 class ManualClock:
@@ -59,6 +69,79 @@ class RecordingPublisher:
         self.published.append(command)
         if self.on_publish is not None:
             self.on_publish()
+
+
+class GatedProvider:
+    """A provider whose calls can be held open, so concurrency is observable.
+
+    It wraps the real deterministic mock rather than replacing it, so what a held call finally
+    returns is exactly what an ungated run would have produced.
+    """
+
+    def __init__(self, inner: Provider, gated: bool = False) -> None:
+        self._inner = inner
+        self._gate: asyncio.Event | None = None
+        self._in_flight: list[GenerationRequest] = []
+        self.started: list[GenerationRequest] = []
+        self.peak_in_flight = 0
+        self._peak_by_tier: Counter[AttentionTier] = Counter()
+        self._peak_by_npc: Counter[str] = Counter()
+        if gated:
+            self.gate()
+
+    def gate(self) -> None:
+        """Hold every call from here on until `release_all`."""
+        self._gate = asyncio.Event()
+
+    def release_all(self) -> None:
+        if self._gate is not None:
+            self._gate.set()
+            self._gate = None
+
+    def peak_in_flight_for(self, tier: AttentionTier) -> int:
+        return self._peak_by_tier[tier]
+
+    def peak_in_flight_for_npc(self, npc_id: str) -> int:
+        return self._peak_by_npc[npc_id]
+
+    async def started_after(self, expected: int) -> int:
+        """Wait for ``expected`` calls to start, then for the scheduler to stop starting more.
+
+        The sleeps wait for work to happen; they never decide an assertion. Once the scheduler
+        has dispatched everything its limits allow, the count is stable, so the number this
+        returns is the same on every run.
+        """
+        for _ in range(WAIT_TICKS):
+            if len(self.started) >= expected:
+                break
+            await asyncio.sleep(TICK_SECONDS)
+
+        settled = len(self.started)
+        for _ in range(SETTLE_TICKS):
+            await asyncio.sleep(TICK_SECONDS)
+        assert len(self.started) == settled, "the scheduler started more work than it may"
+        return settled
+
+    async def generate(self, request: GenerationRequest) -> GeneratedBehaviour:
+        self.started.append(request)
+        self._in_flight.append(request)
+        self._record_peaks()
+        gate = self._gate
+        try:
+            if gate is not None:
+                await gate.wait()
+            return await self._inner.generate(request)
+        finally:
+            self._in_flight.remove(request)
+
+    def _record_peaks(self) -> None:
+        self.peak_in_flight = max(self.peak_in_flight, len(self._in_flight))
+        for tier in {request.tier for request in self._in_flight}:
+            running = sum(1 for one in self._in_flight if one.tier is tier)
+            self._peak_by_tier[tier] = max(self._peak_by_tier[tier], running)
+        for npc_id in {request.npc_id for request in self._in_flight}:
+            running = sum(1 for one in self._in_flight if one.npc_id == npc_id)
+            self._peak_by_npc[npc_id] = max(self._peak_by_npc[npc_id], running)
 
 
 class RecordingTelemetry:

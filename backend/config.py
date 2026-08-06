@@ -38,6 +38,14 @@ class Settings(BaseSettings):
     # Specification #1: a command is acceptable for 15 seconds from its creation.
     command_lifetime_ms: int = Field(default=15_000, gt=0)
 
+    # Specification #1: provider concurrency is capped at two Focused and six Reactive calls,
+    # with eight in total. These bound outbound model calls and are a different quantity from
+    # the Router's Focused and Reactive *capacities*, which happen to carry the same numbers
+    # and are owned by Elson & Daniel behind the Router port.
+    focused_concurrency: int = Field(default=2, gt=0)
+    reactive_concurrency: int = Field(default=6, gt=0)
+    total_concurrency: int = Field(default=8, gt=0)
+
     # Specification #1: witness membership freezes at event start within 12 blocks, and nearby
     # spans 12 to 24 blocks. Both are configurable because the handoff contract asks for it and
     # a different scene may need a different scale.

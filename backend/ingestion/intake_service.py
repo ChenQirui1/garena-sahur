@@ -179,7 +179,11 @@ class IntakeService:
         return IntakeResult(IntakeOutcome.APPLIED)
 
     async def _refresh_routing(self, snapshot: WorldSnapshot) -> None:
-        """Snapshot arrival refreshes routing; it never asks for generation by itself."""
+        """Snapshot arrival refreshes routing; it never asks for generation by itself.
+
+        Promotion and expiry are noticed when the refreshed result comes back, on the routing
+        worker, so a burst of snapshots is coalesced before any of them is looked at.
+        """
         admission = self.conversation.observe_snapshot(snapshot)
         if snapshot.active_conversation is not None:
             # An open conversation is a live interaction, so its target keeps its recency
