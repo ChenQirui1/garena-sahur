@@ -99,10 +99,39 @@ def ordered_roles(roles: frozenset[str] | set[str]) -> tuple[str, ...]:
     return tuple(role for role in ROLE_ORDER if role in roles)
 
 
+def strongest_involvement(
+    npc_id: str,
+    position: Vector3 | None,
+    active: tuple[StoredEvent, ...],
+    radii: EventRadii,
+) -> tuple[StoredEvent, tuple[str, ...]] | None:
+    """The one active event ``npc_id`` is most involved in, or ``None`` for none of them.
+
+    Where `enrichment_for` reduces every event to one number the Router can weigh, this keeps
+    the event that produced it, because a prompt has room for one event and has to say which.
+    Ties keep the earlier event: `active` is ordered, so the same stored state always wins the
+    same way.
+    """
+    strongest: tuple[StoredEvent, tuple[str, ...]] | None = None
+    best = UNRELATED_RELEVANCE
+    for stored in active:
+        roles = roles_in(npc_id, position, stored, radii)
+        relevance = relevance_of(roles)
+        if relevance > best:
+            best = relevance
+            strongest = (stored, ordered_roles(roles))
+    return strongest
+
+
 def roles_in(
-    npc_id: str, position: Vector3, stored: StoredEvent, radii: EventRadii
+    npc_id: str, position: Vector3 | None, stored: StoredEvent, radii: EventRadii
 ) -> frozenset[str]:
-    """Every part ``npc_id`` currently plays in one active event."""
+    """Every part ``npc_id`` currently plays in one active event.
+
+    Only `nearby` is positional, so an NPC the current snapshot has stopped observing keeps the
+    roles the event itself names. Being robbed is a fact about the theft, not about where the
+    victim is standing now.
+    """
     event = stored.event
     roles = set()
     if npc_id in event.actor_npc_ids:
@@ -114,7 +143,11 @@ def roles_in(
     if npc_id in stored.witnesses:
         roles.add(ROLE_WITNESS)
 
-    if not roles and _blocks_between(position, event.position) <= radii.nearby_blocks:
+    if (
+        not roles
+        and position is not None
+        and _blocks_between(position, event.position) <= radii.nearby_blocks
+    ):
         roles.add(ROLE_NEARBY)
     return frozenset(roles)
 
