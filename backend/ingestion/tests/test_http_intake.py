@@ -247,13 +247,20 @@ async def test_an_invalid_snapshot_is_rejected_before_state_changes(backend: Bac
     assert (await observe_routing(backend))[0] == 404
 
 
-async def test_more_candidates_than_configured_are_rejected(tmp_path: Path) -> None:
-    async with backend_for(RecordingRouter(), tmp_path, max_snapshot_candidates=1) as backend:
-        code, body = await ingest(backend, TOPIC_WORLD_SNAPSHOT, world_snapshot())
+async def test_a_snapshot_is_never_rejected_for_the_size_of_its_candidate_set(
+    backend: Backend,
+) -> None:
+    """No source bounds `npcs`, so a dense candidate set routes like a sparse one (#2)."""
+    crowd = [npc(f"villager-{index}") for index in range(200)]
 
-        assert code == 422
-        assert "at most 1 candidates" in body["detail"]
-        assert backend.router.routed == []
+    code, body = await ingest(
+        backend,
+        TOPIC_WORLD_SNAPSHOT,
+        world_snapshot(candidate_count=len(crowd), npcs=crowd),
+    )
+
+    assert (code, body["outcome"]) == (202, "applied")
+    assert [snapshot.candidate_count for snapshot in backend.router.routed] == [200]
 
 
 async def test_an_unknown_topic_is_rejected(backend: Backend) -> None:
