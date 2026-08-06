@@ -371,3 +371,19 @@ async def test_a_victim_the_snapshot_has_stopped_observing_still_gets_its_event(
 
     assert _body(context, EVENT) == describe_event(THEFT, (ROLE_TARGET,))
     assert WORLD not in {section.name for section in context.sections}
+
+
+async def test_a_departed_bystander_is_near_nothing_rather_than_near_everything(
+    parts: Parts,
+) -> None:
+    # The brawl gives the shopkeeper no role of its own, and a snapshot that has stopped
+    # observing it cannot say whether it is still close enough to notice. Proximity it cannot
+    # measure is proximity it does not claim.
+    await parts.activate(BRAWL, frozenset())
+    departed = validate_world_snapshot(
+        world_snapshot(npcs=[npc(THIEF)], candidate_count=1)
+    )
+
+    context = await parts.builder.build(AttentionTier.FOCUSED, TRIGGERING_TURN, departed)
+
+    assert EVENT not in {section.name for section in context.sections}
