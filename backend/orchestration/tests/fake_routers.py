@@ -7,14 +7,19 @@ Passing against these proves the owned handoff only; it is not live Router integ
 
 from __future__ import annotations
 
+from collections import Counter
+from dataclasses import replace
+
 from backend.orchestration.router_port import (
     RESULT_SCHEMA_VERSION,
     RESULT_TYPE,
     AttentionTier,
     RoutingAssignment,
+    RoutingDiagnostics,
     RoutingNpc,
     RoutingResult,
     RoutingSnapshot,
+    TierCounts,
 )
 
 
@@ -64,6 +69,36 @@ class RecordingRouter:
 
     def reset_session(self, session_id: str) -> None:
         return None
+
+
+class ReportingRouter(RecordingRouter):
+    """Also reports the counts and diagnostics section 5 documents.
+
+    The Router that exists today reports neither, so nothing else in the owned suite exercises
+    the path where they are present and consistent.
+    """
+
+    focused_capacity = 2
+    reactive_capacity = 6
+    routing_time_ms = 0.31
+
+    def route(self, snapshot: RoutingSnapshot) -> RoutingResult:
+        result = super().route(snapshot)
+        tallied = Counter(assignment.tier for assignment in result.assignments)
+        return replace(
+            result,
+            counts=TierCounts(
+                focused=tallied[AttentionTier.FOCUSED],
+                reactive=tallied[AttentionTier.REACTIVE],
+                ambient=tallied[AttentionTier.AMBIENT],
+            ),
+            diagnostics=RoutingDiagnostics(
+                focused_capacity=self.focused_capacity,
+                reactive_capacity=self.reactive_capacity,
+                candidate_count=len(snapshot.npcs),
+                routing_time_ms=self.routing_time_ms,
+            ),
+        )
 
 
 class EventAwareRouter(RecordingRouter):

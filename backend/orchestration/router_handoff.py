@@ -7,6 +7,7 @@ from __future__ import annotations
 
 import asyncio
 import logging
+from collections import Counter
 from dataclasses import dataclass
 from enum import StrEnum
 from typing import Awaitable, Callable
@@ -17,8 +18,10 @@ from backend.orchestration.router_port import (
     AttentionTier,
     RouterPort,
     RoutingAssignment,
+    RoutingDiagnostics,
     RoutingResult,
     RoutingSnapshot,
+    TierCounts,
 )
 
 logger = logging.getLogger(__name__)
@@ -33,7 +36,12 @@ class RoutingStatus(StrEnum):
 
 @dataclass(frozen=True, slots=True)
 class RoutingOutcome:
-    """What the Router produced for one routed snapshot, or why nothing was produced."""
+    """What the Router produced for one routed snapshot, or why nothing was produced.
+
+    `counts` and `diagnostics` stay `None` when the Router sent none, so a consumer can tell
+    "the Router did not report them" from "the Router reported them and they held". Today's
+    Router reports neither, which is why absence is not a failure.
+    """
 
     session_id: str
     world_id: str
@@ -41,6 +49,8 @@ class RoutingOutcome:
     status: RoutingStatus
     assignments: tuple[RoutingAssignment, ...] = ()
     failure_reason: str | None = None
+    counts: TierCounts | None = None
+    diagnostics: RoutingDiagnostics | None = None
 
 
 class RouterHandoff:
@@ -221,6 +231,8 @@ class RouterHandoff:
             sequence=snapshot.sequence,
             status=RoutingStatus.ROUTED,
             assignments=tuple(result.assignments),
+            counts=result.counts,
+            diagnostics=result.diagnostics,
         )
 
     @staticmethod
@@ -261,5 +273,54 @@ def _reject_reason(result: object, snapshot: RoutingSnapshot) -> str | None:
         if assignment.npc_id in assigned:
             return f"{assignment.npc_id} was assigned more than once"
         assigned.add(assignment.npc_id)
+
+    return _reject_reported_totals_reason(result)
+
+
+def _reject_reported_totals_reason(result: RoutingResult) -> str | None:
+    """Describe why a result's own counts and diagnostics contradict its assignments.
+
+    Every comparison here is a result against itself, using the capacities the Router chose to
+    report. The backend neither reads `backend/router/config.py` nor decides a tier, so this
+    checks the invariants `docs/message_schemas.md` §5 states without duplicating the capacity
+    enforcement that produced them.
+
+    Absence is not a rejection: today's Router reports neither field, and §5 states the
+    invariants without saying the fields are required.
+    """
+    counts, diagnostics = result.counts, result.diagnostics
+    if counts is not None and not isinstance(counts, TierCounts):
+        return "counts is not a tier count"
+    if diagnostics is not None and not isinstance(diagnostics, RoutingDiagnostics):
+        return "diagnostics is not routing diagnostics"
+
+    tallied = Counter(assignment.tier for assignment in result.assignments)
+
+    if counts is not None:
+        for tier, counted in (
+            (AttentionTier.FOCUSED, counts.focused),
+            (AttentionTier.REACTIVE, counts.reactive),
+            (AttentionTier.AMBIENT, counts.ambient),
+        ):
+            if counted != tallied[tier]:
+                return (
+                    f"counts report {counted} {tier.value}, "
+                    f"the assignments hold {tallied[tier]}"
+                )
+        if diagnostics is not None:
+            total = counts.focused + counts.reactive + counts.ambient
+            if total != diagnostics.candidate_count:
+                return (
+                    f"counts sum to {total}, not the routed "
+                    f"candidate_count {diagnostics.candidate_count}"
+                )
+
+    if diagnostics is not None:
+        for tier, capacity in (
+            (AttentionTier.FOCUSED, diagnostics.focused_capacity),
+            (AttentionTier.REACTIVE, diagnostics.reactive_capacity),
+        ):
+            if tallied[tier] > capacity:
+                return f"{tallied[tier]} {tier.value} exceeds its capacity of {capacity}"
 
     return None

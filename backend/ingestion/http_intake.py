@@ -12,6 +12,7 @@ from pydantic import BaseModel, ConfigDict
 
 from backend.ingestion.intake_service import IntakeOutcome, IntakeResult, IntakeService
 from backend.orchestration.router_handoff import RouterHandoff, RoutingOutcome
+from backend.orchestration.router_port import RoutingDiagnostics, TierCounts
 
 if TYPE_CHECKING:
     from backend.main import Pipeline
@@ -109,6 +110,12 @@ def _as_body(result: IntakeResult) -> dict[str, str | None]:
 
 
 def _as_routing_body(outcome: RoutingOutcome) -> dict[str, Any]:
+    """Project one outcome for local development, carrying every field the Router reported.
+
+    `docs/architecture.md` requires the development adapters to carry the same canonical
+    payloads, so a field the Router did report must not be dropped on the way out. A field it
+    did not report stays `null` rather than disappearing.
+    """
     return {
         "session_id": outcome.session_id,
         "world_id": outcome.world_id,
@@ -122,7 +129,35 @@ def _as_routing_body(outcome: RoutingOutcome) -> dict[str, Any]:
                 "previous_tier": assignment.previous_tier,
                 "changed": assignment.changed,
                 "reasons": list(assignment.reasons),
+                "direct_score": assignment.direct_score,
+                "propagated_score": assignment.propagated_score,
+                "final_score": assignment.final_score,
             }
             for assignment in outcome.assignments
         ],
+        "counts": _as_counts_body(outcome.counts),
+        "diagnostics": _as_diagnostics_body(outcome.diagnostics),
+    }
+
+
+def _as_counts_body(counts: TierCounts | None) -> dict[str, int] | None:
+    if counts is None:
+        return None
+    return {
+        "focused": counts.focused,
+        "reactive": counts.reactive,
+        "ambient": counts.ambient,
+    }
+
+
+def _as_diagnostics_body(
+    diagnostics: RoutingDiagnostics | None,
+) -> dict[str, float] | None:
+    if diagnostics is None:
+        return None
+    return {
+        "focused_capacity": diagnostics.focused_capacity,
+        "reactive_capacity": diagnostics.reactive_capacity,
+        "candidate_count": diagnostics.candidate_count,
+        "routing_time_ms": diagnostics.routing_time_ms,
     }
