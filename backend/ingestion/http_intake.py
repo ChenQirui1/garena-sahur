@@ -5,6 +5,7 @@ Owner: Jerome & Richard
 
 from __future__ import annotations
 
+from dataclasses import asdict
 from typing import TYPE_CHECKING, Annotated, Any, cast
 
 from fastapi import APIRouter, Depends, Request, Response, status
@@ -109,6 +110,12 @@ def _as_body(result: IntakeResult) -> dict[str, str | None]:
 
 
 def _as_routing_body(outcome: RoutingOutcome) -> dict[str, Any]:
+    """Project one outcome for local development, carrying every field the Router reported.
+
+    `docs/architecture.md` requires the development adapters to carry the same canonical
+    payloads, so a field the Router did report must not be dropped on the way out. A field it
+    did not report stays `null` rather than disappearing.
+    """
     return {
         "session_id": outcome.session_id,
         "world_id": outcome.world_id,
@@ -122,7 +129,14 @@ def _as_routing_body(outcome: RoutingOutcome) -> dict[str, Any]:
                 "previous_tier": assignment.previous_tier,
                 "changed": assignment.changed,
                 "reasons": list(assignment.reasons),
+                "direct_score": assignment.direct_score,
+                "propagated_score": assignment.propagated_score,
+                "final_score": assignment.final_score,
             }
             for assignment in outcome.assignments
         ],
+        "counts": asdict(outcome.counts) if outcome.counts is not None else None,
+        "diagnostics": (
+            asdict(outcome.diagnostics) if outcome.diagnostics is not None else None
+        ),
     }

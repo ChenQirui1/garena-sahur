@@ -91,6 +91,9 @@ async def test_a_new_snapshot_is_accepted_and_reaches_the_router(backend: Backen
                     "previous_tier": None,
                     "changed": True,
                     "reasons": [],
+                    "direct_score": None,
+                    "propagated_score": None,
+                    "final_score": None,
                 },
                 {
                     "npc_id": THIEF,
@@ -98,8 +101,13 @@ async def test_a_new_snapshot_is_accepted_and_reaches_the_router(backend: Backen
                     "previous_tier": None,
                     "changed": True,
                     "reasons": [],
+                    "direct_score": None,
+                    "propagated_score": None,
+                    "final_score": None,
                 },
             ],
+            "counts": None,
+            "diagnostics": None,
         },
     )
 

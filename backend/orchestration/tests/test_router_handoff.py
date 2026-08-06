@@ -2,7 +2,11 @@
 
 from __future__ import annotations
 
-from typing import AsyncIterator
+import json
+import re
+from dataclasses import fields
+from pathlib import Path
+from typing import Any, AsyncIterator
 
 import pytest
 import pytest_asyncio
@@ -20,8 +24,11 @@ from backend.orchestration.router_port import (
     AttentionTier,
     CandidatePolicy,
     RoutingAssignment,
+    RoutingDiagnostics,
     RoutingNpc,
+    RoutingResult,
     RoutingSnapshot,
+    TierCounts,
 )
 from backend.orchestration.tests.fake_routers import (
     RaisingRouter,
@@ -34,10 +41,16 @@ from backend.orchestration.tests.fake_routers import (
 SESSION_ID = "demo-01"
 WORLD_ID = "minecraft-overworld-market"
 SHOPKEEPER = "shopkeeper-uuid"
+THIEF = "thief-uuid"
 TIMESTAMP_MS = 1_786_208_500_123
+MESSAGE_SCHEMAS = Path(__file__).resolve().parents[3] / "docs" / "message_schemas.md"
 
 
-def routing_snapshot(sequence: int, target_npc_id: str | None = None) -> RoutingSnapshot:
+def routing_snapshot(
+    sequence: int,
+    target_npc_id: str | None = None,
+    npc_ids: tuple[str, ...] = (SHOPKEEPER,),
+) -> RoutingSnapshot:
     return RoutingSnapshot(
         schema_version=SNAPSHOT_SCHEMA_VERSION,
         snapshot_type=SNAPSHOT_TYPE,
@@ -58,10 +71,10 @@ def routing_snapshot(sequence: int, target_npc_id: str | None = None) -> Routing
                 latest_turn_id=None,
             )
         ),
-        candidate_count=1,
+        candidate_count=len(npc_ids),
         npcs=[
             RoutingNpc(
-                npc_id=SHOPKEEPER,
+                npc_id=npc_id,
                 world_distance_blocks=3.4,
                 viewport_center_distance=0.07,
                 inside_viewport=True,
@@ -70,6 +83,7 @@ def routing_snapshot(sequence: int, target_npc_id: str | None = None) -> Routing
                 event_roles=[],
                 interaction_recency=0.0,
             )
+            for npc_id in npc_ids
         ],
         attention_edges=[],
     )
@@ -365,3 +379,171 @@ async def test_a_stopped_handoff_reports_that_it_is_not_running() -> None:
 
     await handoff.stop()
     assert handoff.is_running is False
+
+
+def documented_result() -> dict[str, Any]:
+    """The `routing_result` the tracked contract publishes, parsed rather than transcribed."""
+    section = MESSAGE_SCHEMAS.read_text().split("## 5. Router `routing_result`")[1]
+    block = re.search(r"```json\n(.*?)\n```", section, re.DOTALL)
+    assert block is not None, "section 5 no longer publishes a routing_result example"
+    return json.loads(block.group(1))
+
+
+def documented_assignments() -> tuple[RoutingAssignment, ...]:
+    return tuple(
+        RoutingAssignment(
+            npc_id=documented["npc_id"],
+            tier=AttentionTier(documented["tier"]),
+            previous_tier=(
+                AttentionTier(documented["previous_tier"])
+                if documented["previous_tier"] is not None
+                else None
+            ),
+            changed=documented["changed"],
+            reasons=tuple(documented["reasons"]),
+            direct_score=documented["direct_score"],
+            propagated_score=documented["propagated_score"],
+            final_score=documented["final_score"],
+        )
+        for documented in documented_result()["assignments"]
+    )
+
+
+def diagnostics(**overrides: float) -> RoutingDiagnostics:
+    documented: dict[str, Any] = documented_result()["diagnostics"]
+    return RoutingDiagnostics(**(documented | overrides))
+
+
+def test_the_owned_result_models_carry_every_field_section_5_documents() -> None:
+    """Diff the models against the tracked JSON, so a dropped field fails instead of surviving."""
+    documented = documented_result()
+
+    assert {field.name for field in fields(RoutingResult)} == set(documented)
+    assert {field.name for field in fields(RoutingAssignment)} == set(
+        documented["assignments"][0]
+    )
+    assert {field.name for field in fields(TierCounts)} == set(documented["counts"])
+    assert {field.name for field in fields(RoutingDiagnostics)} == set(
+        documented["diagnostics"]
+    )
+
+
+async def test_a_result_carrying_the_documented_scores_counts_and_diagnostics_is_routed() -> None:
+    """The whole section 5 example survives the port, values included."""
+    snapshot = routing_snapshot(1842, npc_ids=(SHOPKEEPER, THIEF))
+    documented = documented_result()
+    result = result_for(
+        snapshot,
+        documented_assignments(),
+        counts=TierCounts(**documented["counts"]),
+        diagnostics=RoutingDiagnostics(**documented["diagnostics"]),
+    )
+    handoff = RouterHandoff(ScriptedRouter(result))
+
+    outcome = await handoff.route_now(snapshot)
+
+    assert outcome.status is RoutingStatus.ROUTED
+    assert outcome.counts == TierCounts(focused=1, reactive=0, ambient=1)
+    assert outcome.diagnostics == RoutingDiagnostics(
+        focused_capacity=2, reactive_capacity=6, candidate_count=2, routing_time_ms=0.31
+    )
+    assert [assignment.final_score for assignment in outcome.assignments] == [10.91, 0.37]
+    assert [assignment.direct_score for assignment in outcome.assignments] == [10.91, 0.37]
+    assert [assignment.propagated_score for assignment in outcome.assignments] == [0.0, 0.0]
+
+
+async def test_a_router_that_sends_none_of_the_optional_fields_is_still_routed() -> None:
+    """Today's Router populates none of them; the absence is visible, not treated as valid."""
+    handoff = RouterHandoff(RecordingRouter())
+
+    outcome = await handoff.route_now(routing_snapshot(1842, target_npc_id=SHOPKEEPER))
+
+    assert outcome.status is RoutingStatus.ROUTED
+    assert outcome.counts is None
+    assert outcome.diagnostics is None
+    assert outcome.assignments[0].direct_score is None
+    assert outcome.assignments[0].propagated_score is None
+    assert outcome.assignments[0].final_score is None
+
+
+async def test_counts_at_capacity_are_accepted_because_the_limit_is_a_maximum() -> None:
+    snapshot = routing_snapshot(1842, npc_ids=(SHOPKEEPER, THIEF))
+    result = result_for(
+        snapshot,
+        (assignment(SHOPKEEPER), assignment(THIEF)),
+        counts=TierCounts(focused=2, reactive=0, ambient=0),
+        diagnostics=diagnostics(focused_capacity=2),
+    )
+    handoff = RouterHandoff(ScriptedRouter(result))
+
+    assert (await handoff.route_now(snapshot)).status is RoutingStatus.ROUTED
+
+
+@pytest.mark.parametrize(
+    "make_result",
+    [
+        lambda snapshot: result_for(
+            snapshot,
+            (assignment(SHOPKEEPER), assignment(THIEF, tier=AttentionTier.AMBIENT)),
+            counts=TierCounts(focused=2, reactive=0, ambient=0),
+        ),
+        lambda snapshot: result_for(
+            snapshot,
+            (assignment(SHOPKEEPER), assignment(THIEF, tier=AttentionTier.AMBIENT)),
+            counts=TierCounts(focused=1, reactive=0, ambient=1),
+            diagnostics=diagnostics(candidate_count=3),
+        ),
+        lambda snapshot: result_for(
+            snapshot,
+            (assignment(SHOPKEEPER), assignment(THIEF)),
+            counts=TierCounts(focused=2, reactive=0, ambient=0),
+            diagnostics=diagnostics(focused_capacity=1),
+        ),
+        lambda snapshot: result_for(
+            snapshot,
+            (
+                assignment(SHOPKEEPER, tier=AttentionTier.REACTIVE),
+                assignment(THIEF, tier=AttentionTier.REACTIVE),
+            ),
+            counts=TierCounts(focused=0, reactive=2, ambient=0),
+            diagnostics=diagnostics(reactive_capacity=1),
+        ),
+        lambda snapshot: result_for(
+            snapshot,
+            (assignment(SHOPKEEPER), assignment(THIEF)),
+            diagnostics=diagnostics(focused_capacity=1),
+        ),
+        lambda snapshot: result_for(
+            snapshot,
+            (assignment(SHOPKEEPER), assignment(THIEF, tier=AttentionTier.AMBIENT)),
+            counts={"focused": 1, "reactive": 0, "ambient": 1},
+        ),
+        lambda snapshot: result_for(
+            snapshot,
+            (assignment(SHOPKEEPER), assignment(THIEF, tier=AttentionTier.AMBIENT)),
+            diagnostics={"focused_capacity": 2},
+        ),
+    ],
+    ids=[
+        "counts-contradict-the-assignments",
+        "counts-do-not-sum-to-candidate-count",
+        "focused-count-exceeds-focused-capacity",
+        "reactive-count-exceeds-reactive-capacity",
+        "capacity-exceeded-with-counts-absent",
+        "counts-is-not-a-tier-count",
+        "diagnostics-is-not-routing-diagnostics",
+    ],
+)
+async def test_a_result_that_breaks_a_documented_invariant_fails_closed(
+    make_result: object,
+) -> None:
+    snapshot = routing_snapshot(1842, npc_ids=(SHOPKEEPER, THIEF))
+    router = ScriptedRouter(make_result(snapshot))  # type: ignore[operator]
+    handoff = RouterHandoff(router)
+
+    outcome = await handoff.route_now(snapshot)
+
+    assert outcome.status is RoutingStatus.INVALID_RESULT
+    assert outcome.assignments == ()
+    assert outcome.counts is None
+    assert outcome.diagnostics is None

@@ -110,11 +110,44 @@ class RoutingSnapshot(RouterInput):
 
 @dataclass(frozen=True, slots=True)
 class RoutingAssignment:
+    """One candidate's tier. The scores are the Router's, and it may not compute them yet.
+
+    `docs/message_schemas.md` §5 documents all three, but the Router that exists today sets
+    none of them, so they are optional here and `null` means "not computed" rather than zero.
+    Whether the confirmed port makes them required is #3's, not this module's.
+    """
+
     npc_id: str
     tier: AttentionTier
     previous_tier: AttentionTier | None
     changed: bool
     reasons: tuple[str, ...] = ()
+    direct_score: float | None = None
+    propagated_score: float | None = None
+    final_score: float | None = None
+
+
+@dataclass(frozen=True, slots=True)
+class TierCounts:
+    """How many candidates the Router placed in each tier."""
+
+    focused: int
+    reactive: int
+    ambient: int
+
+
+@dataclass(frozen=True, slots=True)
+class RoutingDiagnostics:
+    """The Router-private limits and timings one result was produced under.
+
+    The capacities are the only way the backend can check the documented capacity invariants:
+    `backend/router/config.py` holds them and the backend must not read or reproduce them.
+    """
+
+    focused_capacity: int
+    reactive_capacity: int
+    candidate_count: int
+    routing_time_ms: float
 
 
 @dataclass(frozen=True, slots=True)
@@ -128,6 +161,8 @@ class RoutingResult:
     sequence: int
     timestamp_ms: int
     assignments: tuple[RoutingAssignment, ...]
+    counts: TierCounts | None = None
+    diagnostics: RoutingDiagnostics | None = None
 
 
 class RouterPort(Protocol):
