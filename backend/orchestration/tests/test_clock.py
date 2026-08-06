@@ -20,8 +20,9 @@ from backend.orchestration.clock import AsyncioDeadlines, DeadlineExceeded, Syst
 BUDGET_MS = 50
 
 # Far longer than the budget, so the wait is abandoned rather than completed. It is never slept
-# through: the deadline cancels it.
-UNREACHABLE_WAIT_MS = 30_000
+# through while `limit` works: the deadline cancels it. It is kept to seconds rather than minutes
+# so that a `limit` which stopped expiring fails quickly instead of stalling the suite.
+UNREACHABLE_WAIT_MS = 5_000
 
 SUB_SECOND = 1.0
 
