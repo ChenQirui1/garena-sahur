@@ -462,6 +462,7 @@ async def test_a_started_revision_generates_for_the_relevant_npcs_only(
 ) -> None:
     await seed(harness)
     await harness.event()
+    await harness.settle()
 
     reacted = [command.npc_id for command in harness.publisher.published]
     assert reacted == [SHOPKEEPER, THIEF, GUARD]
@@ -472,7 +473,9 @@ async def test_a_started_revision_generates_for_the_relevant_npcs_only(
 async def test_an_updated_revision_generates_again(harness: Harness) -> None:
     await seed(harness)
     await harness.event(revision=1)
+    await harness.settle()
     await harness.event(revision=2, status="updated")
+    await harness.settle()
 
     assert len(harness.published_for(SHOPKEEPER)) == 2
     assert [command.command_sequence for command in harness.published_for(SHOPKEEPER)] == [1, 2]
@@ -484,9 +487,11 @@ async def test_a_terminal_revision_never_reaches_a_provider(
 ) -> None:
     await seed(harness)
     await harness.event(revision=1)
+    await harness.settle()
     before = len(harness.telemetry.model_calls)
 
     await harness.event(revision=2, status=terminal)
+    await harness.settle()
 
     assert len(harness.telemetry.model_calls) == before
     assert len(harness.published_for(SHOPKEEPER)) == 1
@@ -499,8 +504,10 @@ async def test_the_same_revision_can_claim_generation_only_once(harness: Harness
     """Redelivery that gets past intake is stopped by the durable generation claim."""
     await seed(harness)
     await harness.event()
+    await harness.settle()
 
     await harness.pipeline.generation.on_event_revision(validate_game_event(game_event()))
+    await harness.settle()
 
     assert len(harness.publisher.published) == 3
     assert len(harness.telemetry.model_calls) == 3
@@ -538,6 +545,7 @@ async def test_a_reaction_command_retains_its_event_and_source_identities(
 ) -> None:
     await seed(harness)
     await harness.event()
+    await harness.settle()
 
     command = harness.published_for(SHOPKEEPER)[0]
     assert command.event_id == EVENT_ID
@@ -556,6 +564,7 @@ async def test_the_model_call_fact_retains_its_event_and_source_identities(
 ) -> None:
     await seed(harness)
     await harness.event()
+    await harness.settle()
 
     fact = next(
         one for one in harness.telemetry.model_calls if one.npc_id == SHOPKEEPER
@@ -575,6 +584,7 @@ async def test_the_reaction_prompt_carries_the_npcs_own_involvement(
     """The event reaches the model as a described trigger, not as a raw payload."""
     await seed(harness)
     await harness.event()
+    await harness.settle()
 
     dialogue = harness.published_for(SHOPKEEPER)[0].dialogue or ""
     assert "market theft" in dialogue

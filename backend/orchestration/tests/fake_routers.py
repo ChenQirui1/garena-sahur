@@ -81,6 +81,45 @@ class EventAwareRouter(RecordingRouter):
         return tier
 
 
+class TierScriptRouter:
+    """Assigns whatever tier the test currently says, and reports the transition honestly.
+
+    Real promotion and demotion come from Elson & Daniel's hysteresis, which the backend must
+    not reproduce. A test that needs a specific transition therefore states it directly here
+    rather than trying to provoke one through enrichment.
+    """
+
+    def __init__(
+        self,
+        tiers: dict[str, AttentionTier] | None = None,
+        default: AttentionTier = AttentionTier.AMBIENT,
+    ) -> None:
+        self.tiers = dict(tiers or {})
+        self.default = default
+        self.routed: list[RoutingSnapshot] = []
+        self._previous: dict[str, AttentionTier] = {}
+
+    def route(self, snapshot: RoutingSnapshot) -> RoutingResult:
+        self.routed.append(snapshot)
+        assignments = []
+        for npc in snapshot.npcs:
+            tier = self.tiers.get(npc.npc_id, self.default)
+            previous = self._previous.get(npc.npc_id)
+            assignments.append(
+                RoutingAssignment(
+                    npc_id=npc.npc_id,
+                    tier=tier,
+                    previous_tier=previous,
+                    changed=previous is not None and previous is not tier,
+                )
+            )
+            self._previous[npc.npc_id] = tier
+        return result_for(snapshot, tuple(assignments))
+
+    def reset_session(self, session_id: str) -> None:
+        self._previous.clear()
+
+
 class RaisingRouter:
     def __init__(self, failure: Exception | None = None) -> None:
         self.failure = failure or RuntimeError("router exploded")

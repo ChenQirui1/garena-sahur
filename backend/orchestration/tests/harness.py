@@ -23,15 +23,21 @@ from backend.ingestion.tests.canonical_messages import (
     world_snapshot,
 )
 from backend.main import Adapters, Pipeline, create_app
+from backend.models.mock_provider import MockProvider
 from backend.orchestration.behaviour_command import BehaviourCommand
 from backend.orchestration.conversation_manager import ConversationState
 from backend.orchestration.router_port import RouterPort, RoutingNpc, RoutingSnapshot
 from backend.orchestration.tests.fake_routers import RecordingRouter
 from backend.orchestration.tests.fakes import (
+    GatedProvider,
     ManualClock,
     RecordingPublisher,
     RecordingTelemetry,
 )
+
+# Routing can queue generation and generation can re-route, so settling alternates between the
+# two until neither has anything left rather than draining each once.
+SETTLE_ROUNDS = 8
 
 PROFILE_DOCUMENT = """
 {
@@ -75,6 +81,7 @@ class Harness:
         telemetry: RecordingTelemetry,
         clock: ManualClock,
         router: RouterPort,
+        provider: GatedProvider,
     ) -> None:
         self.client = client
         self.pipeline = pipeline
@@ -82,6 +89,7 @@ class Harness:
         self.telemetry = telemetry
         self.clock = clock
         self.router = router
+        self.provider = provider
 
     @property
     def routed(self) -> list[RoutingSnapshot]:
@@ -101,9 +109,25 @@ class Harness:
     async def event(self, revision: int = 1, **overrides: Any) -> Any:
         return await self.ingest("game.event", game_event(revision, **overrides))
 
-    async def settle(self) -> None:
+    async def settle_routing(self) -> None:
         """Wait for the coalescing routing worker, which snapshot refresh runs on."""
         await self.pipeline.handoff.wait_until_idle()
+
+    async def settle(self) -> None:
+        """Wait for routing and generation to finish, including what each starts in the other.
+
+        Intake now returns once work is queued, so a component assertion has to say when it
+        expects the queue to have drained rather than assuming the HTTP response meant it had.
+        """
+        for _ in range(SETTLE_ROUNDS):
+            await self.pipeline.handoff.wait_until_idle()
+            await self.pipeline.scheduler.drain()
+            if self.pipeline.handoff.is_idle:
+                return
+        raise AssertionError("routing and generation did not settle")
+
+    def pending_generation_count(self) -> int:
+        return self.pipeline.scheduler.pending_count
 
     def state(self) -> ConversationState:
         return self.pipeline.intake.conversation.state(SESSION_ID)
@@ -134,19 +158,26 @@ def settings_for(tmp_path: Path, profiles: str = PROFILE_DOCUMENT, **overrides: 
 
 
 async def running(
-    settings: Settings, router: RouterPort | None = None
+    settings: Settings, router: RouterPort | None = None, gated: bool = False
 ) -> AsyncIterator[Harness]:
     clock = ManualClock()
     publisher = RecordingPublisher()
     telemetry = RecordingTelemetry()
     router = router or RecordingRouter()
+    provider = GatedProvider(MockProvider(settings.characters_per_token), gated=gated)
     app = create_app(
         settings,
-        Adapters(router=router, publisher=publisher, telemetry=telemetry, clock=clock),
+        Adapters(
+            router=router,
+            publisher=publisher,
+            telemetry=telemetry,
+            clock=clock,
+            provider=provider,
+        ),
     )
     pipeline: Pipeline = app.state.pipeline
     publisher.bind(pipeline.commands)
     async with LifespanManager(app):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://backend") as client:
-            yield Harness(client, pipeline, publisher, telemetry, clock, router)
+            yield Harness(client, pipeline, publisher, telemetry, clock, router, provider)
