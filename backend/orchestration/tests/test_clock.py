@@ -1,10 +1,11 @@
 """Owner: Jerome & Richard
 
-The rest of the suite runs on `ManualClock` and `ManualDeadlines`, which is what makes it
-deterministic — and what leaves the shipped adapters, the ones `backend/main.py` actually wires,
-unproven. A gateway whose deadlines never expire and whose retries never pause passes every other
-test in this repository. These cases are therefore the only ones that touch real time, and they
-stay well under a second by expiring a generous wait rather than waiting out a generous budget.
+The rest of the suite runs on `ManualClock` and `ManualDeadlines`, and where it does reach for
+`AsyncioDeadlines` — `backend/models/tests/test_model_gateway.py` — it does so under budgets a
+deterministic mock never approaches. So a `limit` that never expires, a `sleep` that never waits,
+and a clock frozen at a constant all pass every other test in this repository. These are the only
+cases that let real time decide the outcome, and they stay well under a second by expiring a
+generous wait rather than waiting out a generous budget.
 """
 
 from __future__ import annotations
@@ -24,7 +25,7 @@ BUDGET_MS = 50
 # so that a `limit` which stopped expiring fails quickly instead of stalling the suite.
 UNREACHABLE_WAIT_MS = 5_000
 
-SUB_SECOND = 1.0
+SUITE_BUDGET_SECONDS = 1.0
 
 # 2020-01-01T00:00:00Z. Any epoch-millisecond reading is past it and any monotonic reading on a
 # machine that has not been up for fifty years is not.
@@ -40,7 +41,7 @@ async def test_work_over_its_budget_is_abandoned_inside_a_second() -> None:
         async with AsyncioDeadlines().limit(BUDGET_MS):
             await asyncio.sleep(UNREACHABLE_WAIT_MS / 1000)
 
-    assert time.monotonic() - started < SUB_SECOND
+    assert time.monotonic() - started < SUITE_BUDGET_SECONDS
 
 
 async def test_work_inside_its_budget_is_left_alone() -> None:
@@ -67,9 +68,9 @@ async def test_sleeping_actually_waits_for_the_requested_delay() -> None:
 
     await AsyncioDeadlines().sleep(BUDGET_MS)
 
-    elapsed_ms = (time.monotonic() - started) * 1000
-    assert elapsed_ms >= BUDGET_MS * 0.9
-    assert elapsed_ms < SUB_SECOND * 1000
+    elapsed_seconds = time.monotonic() - started
+    assert elapsed_seconds * 1000 >= BUDGET_MS * 0.9
+    assert elapsed_seconds < SUITE_BUDGET_SECONDS
 
 
 def test_the_monotonic_reading_never_goes_backwards() -> None:

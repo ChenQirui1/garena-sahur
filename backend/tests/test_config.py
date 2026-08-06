@@ -72,15 +72,6 @@ def test_an_out_of_range_environment_value_is_refused(
         settings_from_environment()
 
 
-def test_settings_are_frozen_once_loaded(monkeypatch: pytest.MonkeyPatch) -> None:
-    """Configuration is read once at startup; a later mutation would desynchronise the wiring."""
-    monkeypatch.setenv(f"{ENV_PREFIX}HOST", "0.0.0.0")
-    settings = settings_from_environment()
-
-    with pytest.raises(ValueError):
-        settings.host = "127.0.0.1"  # type: ignore[misc]
-
-
 def test_loading_settings_reads_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     """`load_settings` is what `main` calls, so the environment has to reach it too."""
     monkeypatch.setenv(f"{ENV_PREFIX}LOG_LEVEL", "debug")

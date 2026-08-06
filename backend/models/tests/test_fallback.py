@@ -90,15 +90,17 @@ def library_from(document: Mapping[str, object], tmp_path: Path) -> FallbackLibr
     return FallbackLibrary.load(path)
 
 
+def shipped_library() -> FallbackLibrary:
+    return FallbackLibrary.load(SHIPPED_DIALOGUE)
+
+
 def test_the_shipped_document_answers_the_scenario_theft_for_the_robbed_shopkeeper() -> None:
     """The demo path: a provider failure on the theft's target must not fall past its cached line.
 
     The shipped document holds a `turn` line for this NPC and no `event` line, so an event-driven
     request misses the first rung and the role-and-event rung is the one under test.
     """
-    library = FallbackLibrary.load(SHIPPED_DIALOGUE)
-
-    resolved = library.resolve(
+    resolved = shipped_library().resolve(
         request_for(
             npc_id="shopkeeper-uuid",
             trigger="event",
@@ -116,8 +118,13 @@ def test_the_shipped_document_resolves_every_rung_of_the_ladder() -> None:
 
     Each also matches at least one rung *below* it with different text, so a rung that stopped
     resolving would be visible as the wrong line rather than as an equally passing assertion.
+
+    The generic rung is reached through Ambient, which is not a request the pipeline makes — the
+    shipped document scripts both tiers that can, which the case below asserts. Ambient is the
+    only input under which the shipped document's fourth rung is observable at all, and the
+    criterion is the *full* ladder: a generic line edited away should fail here, not in a demo.
     """
-    library = FallbackLibrary.load(SHIPPED_DIALOGUE)
+    library = shipped_library()
 
     npc_and_trigger = library.resolve(
         request_for(
@@ -146,6 +153,15 @@ def test_the_shipped_document_resolves_every_rung_of_the_ladder() -> None:
             tier=AttentionTier.FOCUSED,
         )
     )
+    generic = library.resolve(
+        request_for(
+            npc_id="thief-uuid",
+            trigger="event",
+            event_type="market_fire",
+            roles=("actor",),
+            tier=AttentionTier.AMBIENT,
+        )
+    )
 
     assert (npc_and_trigger.source, npc_and_trigger.dialogue) == (
         SOURCE_NPC_AND_TRIGGER,
@@ -159,6 +175,7 @@ def test_the_shipped_document_resolves_every_rung_of_the_ladder() -> None:
         SOURCE_TIER_SCRIPTED,
         "Sorry — say that again? The market's got my head spinning.",
     )
+    assert (generic.source, generic.dialogue) == (SOURCE_GENERIC, "...")
 
 
 def test_the_shipped_document_keeps_the_generic_rung_a_last_resort() -> None:
@@ -167,7 +184,7 @@ def test_the_shipped_document_keeps_the_generic_rung_a_last_resort() -> None:
     That is a property of the shipped data, not of the ladder, so it is asserted rather than
     assumed: dropping a tier line would silently demote real requests to `...`.
     """
-    library = FallbackLibrary.load(SHIPPED_DIALOGUE)
+    library = shipped_library()
 
     scripted = [
         library.resolve(
