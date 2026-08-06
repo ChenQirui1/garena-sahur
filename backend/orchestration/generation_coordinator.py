@@ -41,6 +41,7 @@ from backend.orchestration.generation_policy import (
     CurrentFacts,
     Focus,
     Generation,
+    PolicyDecision,
     Trigger,
     decide_for_event,
     decide_for_expiry,
@@ -56,6 +57,7 @@ from backend.orchestration.observations import (
     MISSING_PROFILE,
     MODEL_CALL_FAILED,
     NO_WORLD_STATE,
+    TRIGGER_SUPPRESSED,
     Observations,
 )
 from backend.orchestration.router_handoff import RouterHandoff, RoutingOutcome, RoutingStatus
@@ -174,12 +176,32 @@ class GenerationCoordinator:
             focus = await self._focus_for(outcome.session_id, assignment.npc_id)
             behaviour = await self.commands.latest_for(outcome.session_id, assignment.npc_id)
             promotion = decide_for_promotion(assignment, outcome, focus, behaviour, now_ms)
-            if promotion is not None:
-                self.scheduler.submit(promotion)
+            if self._acted_on(promotion, outcome.session_id, assignment.npc_id, "promotion"):
                 continue
             expiry = decide_for_expiry(assignment, outcome, focus, behaviour, now_ms)
-            if expiry is not None:
-                self.scheduler.submit(expiry)
+            self._acted_on(expiry, outcome.session_id, assignment.npc_id, "expiry")
+
+    def _acted_on(
+        self, decision: PolicyDecision, session_id: str, npc_id: str, trigger: str
+    ) -> bool:
+        """Queue what the decision produced, or say why an eligible trigger produced nothing.
+
+        A decision that is neither is the ordinary case — most candidates are neither promoted
+        nor expired on any given snapshot — and reporting it would drown the record.
+        """
+        if decision.generation is not None:
+            self.scheduler.submit(decision.generation)
+            return True
+        if decision.suppressed is not None:
+            self.observations.note(
+                TRIGGER_SUPPRESSED,
+                session_id=session_id,
+                npc_id=npc_id,
+                trigger=trigger,
+                reason=decision.suppressed,
+            )
+            return True
+        return False
 
     # ---- executor -----------------------------------------------------------------
 

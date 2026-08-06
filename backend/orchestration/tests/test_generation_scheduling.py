@@ -25,8 +25,10 @@ from backend.ingestion.tests.canonical_messages import (
     world_snapshot,
 )
 from backend.orchestration.conversation_manager import ConversationState
+from backend.orchestration.generation_policy import NOTHING_TO_SPEAK_ABOUT
 from backend.orchestration.observations import (
     GENERATION_SUPPRESSED,
+    TRIGGER_SUPPRESSED,
     WORK_CANCELLED,
     WORK_FAILED,
     WORK_SUPERSEDED,
@@ -149,6 +151,10 @@ async def test_a_promotion_already_satisfied_by_unexpired_behaviour_never_calls_
         await harness.settle()
 
         assert len(harness.published_for(SHOPKEEPER)) == 1
+        assert [
+            one["reason"] for one in harness.observed(TRIGGER_SUPPRESSED)
+            if one["trigger"] == "promotion"
+        ] == ["current behaviour already satisfies the promotion"]
 
 
 async def test_expired_behaviour_during_an_active_conversation_generates_again(
@@ -210,6 +216,11 @@ async def test_expiry_with_nothing_left_to_speak_about_never_calls_a_provider(
         assert len(harness.published_for(SHOPKEEPER)) == 1
         assert harness.telemetry.model_calls[-1].turn_id == "turn-004"
         assert harness.observed(WORK_FAILED) == []
+        # The silence is a recorded backend decision, not an unexplained gap (ADR 0009).
+        assert [
+            one["reason"] for one in harness.observed(TRIGGER_SUPPRESSED)
+            if one["trigger"] == "expiry"
+        ] == [NOTHING_TO_SPEAK_ABOUT]
 
 
 async def test_a_router_failure_does_not_cancel_work_already_queued(

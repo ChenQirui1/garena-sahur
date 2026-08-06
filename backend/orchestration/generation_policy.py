@@ -38,6 +38,10 @@ GENERATING_TIERS = frozenset({AttentionTier.FOCUSED, AttentionTier.REACTIVE})
 # Upward means more foreground attention, which is the only direction that can warrant a call.
 TIER_RANK = {AttentionTier.AMBIENT: 0, AttentionTier.REACTIVE: 1, AttentionTier.FOCUSED: 2}
 
+# A backend decision taken under silence (ADR 0009), so it says so where it can be seen: an NPC
+# that was promoted or whose behaviour expired stays quiet when there is nothing to speak about.
+NOTHING_TO_SPEAK_ABOUT = "no active event or conversation requires foreground behaviour"
+
 
 class Trigger(StrEnum):
     TURN = "turn"
@@ -247,37 +251,43 @@ def decide_for_promotion(
     focus: Focus,
     current_behaviour: BehaviourCommand | None,
     now_ms: int,
-) -> Generation | None:
+) -> PolicyDecision:
     """An upward promotion warrants generation only while nothing current already covers it.
 
     "Lacking suitable current behaviour" is not defined by any source. The backend cannot judge
     whether existing dialogue suits a new tier, so it reads the phrase as the one thing it can
     observe: the NPC has no unexpired command.
+
+    An empty decision means this was never a promotion; a suppressed one means it was, and says
+    why it produced nothing. Only the second is worth reporting — the first happens for every
+    unchanged candidate on every snapshot.
     """
     if assignment.tier not in GENERATING_TIERS:
-        return None
+        return PolicyDecision()
     if not assignment.changed or assignment.previous_tier is None:
-        return None
+        return PolicyDecision()
     if TIER_RANK[assignment.tier] <= TIER_RANK[assignment.previous_tier]:
-        return None
+        return PolicyDecision()
     if current_behaviour is not None and now_ms < current_behaviour.expires_at_ms:
-        return None
+        return PolicyDecision(suppressed="current behaviour already satisfies the promotion")
     if not focus.exists:
-        return None
+        return PolicyDecision(suppressed=NOTHING_TO_SPEAK_ABOUT)
 
-    return Generation(
-        trigger=Trigger.PROMOTION,
-        session_id=outcome.session_id,
-        world_id=outcome.world_id,
-        npc_id=assignment.npc_id,
-        tier=assignment.tier,
-        source_sequence=outcome.sequence,
-        claim_key=claim_key(
-            Trigger.PROMOTION, outcome.session_id, assignment.npc_id, outcome.sequence
-        ),
-        turn=focus.turn,
-        event=focus.event,
-        roles=focus.roles,
+    return PolicyDecision(
+        generation=Generation(
+            trigger=Trigger.PROMOTION,
+            session_id=outcome.session_id,
+            world_id=outcome.world_id,
+            npc_id=assignment.npc_id,
+            tier=assignment.tier,
+            source_sequence=outcome.sequence,
+            claim_key=claim_key(
+                Trigger.PROMOTION, outcome.session_id, assignment.npc_id, outcome.sequence
+            ),
+            turn=focus.turn,
+            event=focus.event,
+            roles=focus.roles,
+        )
     )
 
 
@@ -287,30 +297,32 @@ def decide_for_expiry(
     focus: Focus,
     latest_behaviour: BehaviourCommand | None,
     now_ms: int,
-) -> Generation | None:
+) -> PolicyDecision:
     """Expired behaviour warrants generation only while something still needs foreground work."""
     if assignment.tier not in GENERATING_TIERS:
-        return None
+        return PolicyDecision()
     if latest_behaviour is None or now_ms < latest_behaviour.expires_at_ms:
-        return None
+        return PolicyDecision()
     if not focus.exists:
-        return None
+        return PolicyDecision(suppressed=NOTHING_TO_SPEAK_ABOUT)
 
-    return Generation(
-        trigger=Trigger.EXPIRY,
-        session_id=outcome.session_id,
-        world_id=outcome.world_id,
-        npc_id=assignment.npc_id,
-        tier=assignment.tier,
-        source_sequence=outcome.sequence,
-        claim_key=claim_key(
-            Trigger.EXPIRY,
-            outcome.session_id,
-            assignment.npc_id,
-            latest_behaviour.command_id,
-        ),
-        turn=focus.turn,
-        event=focus.event,
-        roles=focus.roles,
-        expired_command_id=latest_behaviour.command_id,
+    return PolicyDecision(
+        generation=Generation(
+            trigger=Trigger.EXPIRY,
+            session_id=outcome.session_id,
+            world_id=outcome.world_id,
+            npc_id=assignment.npc_id,
+            tier=assignment.tier,
+            source_sequence=outcome.sequence,
+            claim_key=claim_key(
+                Trigger.EXPIRY,
+                outcome.session_id,
+                assignment.npc_id,
+                latest_behaviour.command_id,
+            ),
+            turn=focus.turn,
+            event=focus.event,
+            roles=focus.roles,
+            expired_command_id=latest_behaviour.command_id,
+        )
     )
