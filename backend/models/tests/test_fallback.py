@@ -3,6 +3,10 @@
 The order specification #1 fixes — NPC-and-trigger, role-and-event, tier-scripted, generic — is
 tested by removing one layer at a time, so each case can only pass if the layer below it was
 genuinely reached. Asserting the top layer alone would leave the other three unproven.
+
+Those cases write their own document, which proves the resolution *logic* and nothing about the
+document the service actually loads. The shipped-document cases below close that gap: a fixture
+written from the same misunderstanding as the data cannot catch a key the producers never emit.
 """
 
 from __future__ import annotations
@@ -26,6 +30,18 @@ from backend.models.model_gateway import GenerationRequest
 from backend.orchestration.router_port import AttentionTier
 
 CHARACTERS_PER_TOKEN = 4
+
+SHIPPED_DIALOGUE = Path(__file__).resolve().parents[3] / "data" / "cached_dialogue.json"
+
+# The event kind every producer in this repository emits: `mock-publisher/scenario.py`,
+# `backend/ingestion/tests/canonical_messages.py`, and the `game.event` example in
+# `docs/message_schemas.md` §2. The shipped document has to be keyed on this exact string or the
+# role-and-event rung cannot be reached in the running service.
+SCENARIO_EVENT_TYPE = "market_theft"
+
+# Tiers that reach a provider, and so can ever need fallback content. Ambient never calls a
+# model, so it is not part of the ladder the shipped document has to cover.
+PROVIDER_TIERS = (AttentionTier.FOCUSED, AttentionTier.REACTIVE)
 
 NPC_LINE = "Cached for this NPC and trigger."
 ROLE_LINE = "Cached for a theft witness."
@@ -72,6 +88,112 @@ def library_from(document: Mapping[str, object], tmp_path: Path) -> FallbackLibr
     path = tmp_path / "cached_dialogue.json"
     path.write_text(json.dumps(document))
     return FallbackLibrary.load(path)
+
+
+def test_the_shipped_document_answers_the_scenario_theft_for_the_robbed_shopkeeper() -> None:
+    """The demo path: a provider failure on the theft's target must not fall past its cached line.
+
+    The shipped document holds a `turn` line for this NPC and no `event` line, so an event-driven
+    request misses the first rung and the role-and-event rung is the one under test.
+    """
+    library = FallbackLibrary.load(SHIPPED_DIALOGUE)
+
+    resolved = library.resolve(
+        request_for(
+            npc_id="shopkeeper-uuid",
+            trigger="event",
+            event_type=SCENARIO_EVENT_TYPE,
+            roles=("target",),
+        )
+    )
+
+    assert resolved.source == SOURCE_ROLE_AND_EVENT
+    assert resolved.dialogue == "My bread! Someone stop him!"
+
+
+def test_the_shipped_document_resolves_every_rung_of_the_ladder() -> None:
+    """Each request below matches its rung and every rung above it misses.
+
+    Each also matches at least one rung *below* it with different text, so a rung that stopped
+    resolving would be visible as the wrong line rather than as an equally passing assertion.
+    """
+    library = FallbackLibrary.load(SHIPPED_DIALOGUE)
+
+    npc_and_trigger = library.resolve(
+        request_for(
+            npc_id="shopkeeper-uuid",
+            trigger="turn",
+            event_type=SCENARIO_EVENT_TYPE,
+            roles=("target",),
+            tier=AttentionTier.FOCUSED,
+        )
+    )
+    role_and_event = library.resolve(
+        request_for(
+            npc_id="thief-uuid",
+            trigger="event",
+            event_type=SCENARIO_EVENT_TYPE,
+            roles=("actor",),
+            tier=AttentionTier.FOCUSED,
+        )
+    )
+    tier_scripted = library.resolve(
+        request_for(
+            npc_id="thief-uuid",
+            trigger="event",
+            event_type="market_fire",
+            roles=("actor",),
+            tier=AttentionTier.FOCUSED,
+        )
+    )
+
+    assert (npc_and_trigger.source, npc_and_trigger.dialogue) == (
+        SOURCE_NPC_AND_TRIGGER,
+        "Give me a moment, love — my head's all over the place today.",
+    )
+    assert (role_and_event.source, role_and_event.dialogue) == (
+        SOURCE_ROLE_AND_EVENT,
+        "Nothing to see. Move along.",
+    )
+    assert (tier_scripted.source, tier_scripted.dialogue) == (
+        SOURCE_TIER_SCRIPTED,
+        "Sorry — say that again? The market's got my head spinning.",
+    )
+
+
+def test_the_shipped_document_keeps_the_generic_rung_a_last_resort() -> None:
+    """Generic is unreachable in the running service only while every live tier is scripted.
+
+    That is a property of the shipped data, not of the ladder, so it is asserted rather than
+    assumed: dropping a tier line would silently demote real requests to `...`.
+    """
+    library = FallbackLibrary.load(SHIPPED_DIALOGUE)
+
+    scripted = [
+        library.resolve(
+            request_for(
+                npc_id="stranger-uuid",
+                trigger="event",
+                event_type="market_fire",
+                roles=(),
+                tier=tier,
+            )
+        )
+        for tier in PROVIDER_TIERS
+    ]
+
+    assert [content.source for content in scripted] == [SOURCE_TIER_SCRIPTED] * len(
+        PROVIDER_TIERS
+    )
+    assert all(content.dialogue.strip() for content in scripted)
+
+
+def test_every_shipped_role_line_is_keyed_on_a_producible_event_type() -> None:
+    """A role line keyed on an event kind nothing emits is dead weight in the running service."""
+    entries = json.loads(SHIPPED_DIALOGUE.read_text())["by_role_and_event"]
+
+    assert entries
+    assert {entry["event_type"] for entry in entries} == {SCENARIO_EVENT_TYPE}
 
 
 def test_npc_and_trigger_content_wins_over_every_other_layer(tmp_path: Path) -> None:

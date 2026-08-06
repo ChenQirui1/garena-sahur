@@ -17,27 +17,27 @@
   "by_role_and_event": [
     {
       "role": "actor",
-      "event_type": "theft",
+      "event_type": "market_theft",
       "dialogue": "Nothing to see. Move along."
     },
     {
       "role": "target",
-      "event_type": "theft",
+      "event_type": "market_theft",
       "dialogue": "My bread! Someone stop him!"
     },
     {
       "role": "responder",
-      "event_type": "theft",
+      "event_type": "market_theft",
       "dialogue": "Out of the way — I'm going after him."
     },
     {
       "role": "witness",
-      "event_type": "theft",
+      "event_type": "market_theft",
       "dialogue": "Did you see that? Broad daylight, in the market."
     },
     {
       "role": "nearby",
-      "event_type": "theft",
+      "event_type": "market_theft",
       "dialogue": "What's all that shouting about?"
     }
   ],
