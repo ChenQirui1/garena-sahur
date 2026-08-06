@@ -30,7 +30,6 @@ class Settings(BaseSettings):
     host: str = "127.0.0.1"
     port: int = Field(default=8000, ge=1, le=65535)
     log_level: str = "info"
-    max_snapshot_candidates: int = Field(default=128, ge=1, le=4096)
 
     database_path: Path = Field(default_factory=default_database_path)
     npc_profiles_path: Path = Path("data/npc_profiles.json")
@@ -67,6 +66,9 @@ class Settings(BaseSettings):
     # against a deterministic character estimate rather than a real encoder.
     characters_per_token: int = Field(default=4, gt=0)
 
+    # Specification #1: Focused context is capped at 2,000 input and 120 output tokens and may
+    # include up to eight recent turns; Reactive is capped at 600 and 40 and sees only the
+    # triggering turn, which is why no Reactive history setting exists to sit beside these.
     focused_input_token_limit: int = Field(default=2_000, gt=0)
     focused_output_token_limit: int = Field(default=120, gt=0)
     focused_history_turns: int = Field(default=8, ge=0)

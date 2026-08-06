@@ -78,7 +78,6 @@ class IntakeService:
         recency: InteractionRecency,
         observations: Observations,
         radii: EventRadii,
-        max_snapshot_candidates: int,
     ) -> None:
         self.turns = turns
         self.events = events
@@ -90,7 +89,6 @@ class IntakeService:
         self._recency = recency
         self._observations = observations
         self._radii = radii
-        self._max_snapshot_candidates = max_snapshot_candidates
 
     async def submit(self, topic: str, message: object) -> IntakeResult:
         if topic == TOPIC_LEGACY_NPC_PROFILE:
@@ -108,12 +106,6 @@ class IntakeService:
             snapshot = validate_world_snapshot(message)
         except MessageValidationError as invalid:
             return IntakeResult(IntakeOutcome.INVALID, str(invalid))
-
-        if len(snapshot.npcs) > self._max_snapshot_candidates:
-            return IntakeResult(
-                IntakeOutcome.INVALID,
-                f"npcs: at most {self._max_snapshot_candidates} candidates per snapshot",
-            )
 
         try:
             applied = self._world_state.apply_if_newer(snapshot)

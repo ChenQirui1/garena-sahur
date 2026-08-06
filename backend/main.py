@@ -187,7 +187,6 @@ def build_pipeline(settings: Settings, adapters: Adapters = Adapters()) -> Pipel
             recency=recency,
             observations=observations,
             radii=radii,
-            max_snapshot_candidates=settings.max_snapshot_candidates,
         ),
         generation=generation,
         scheduler=scheduler,
