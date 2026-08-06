@@ -38,6 +38,7 @@ from backend.ingestion.tests.canonical_messages import (
     THIEF,
     conversation_turn,
     game_event,
+    npc,
     world_snapshot,
 )
 from backend.ingestion.turn_store import TurnStore
@@ -353,3 +354,20 @@ async def test_the_event_section_is_counted_and_shed_like_every_other_optional_o
 
     assert [section.name for section in tight.sections] == kept
     assert tight.estimated_input_tokens <= without_event
+
+
+async def test_a_victim_the_snapshot_has_stopped_observing_still_gets_its_event(
+    parts: Parts,
+) -> None:
+    # Generation re-reads the current snapshot, so the target can leave the candidate set
+    # between routing and building. Being robbed is a fact about the theft, not about where
+    # the victim is standing now.
+    await parts.activate(THEFT, frozenset())
+    departed = validate_world_snapshot(
+        world_snapshot(npcs=[npc(THIEF)], candidate_count=1)
+    )
+
+    context = await parts.builder.build(AttentionTier.FOCUSED, TRIGGERING_TURN, departed)
+
+    assert _body(context, EVENT) == describe_event(THEFT, (ROLE_TARGET,))
+    assert WORLD not in {section.name for section in context.sections}

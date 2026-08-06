@@ -86,8 +86,6 @@ class ContextBuilder:
         limits = self._limits[tier]
         profile = self._profiles.profile_for(turn.target_npc_id)
         history = await self._history.before(turn, limits.history_turns)
-        # One lookup feeds both slots the snapshot answers, so an NPC it no longer observes is
-        # equally absent from each rather than described in one and not the other.
         observed = _observed(snapshot, turn.target_npc_id)
 
         sections = self._fit(
@@ -96,7 +94,12 @@ class ContextBuilder:
                 ContextSection(TRIGGER, _trigger(turn.text)),
                 ContextSection(PROFILE, _persona(profile)),
                 ContextSection(
-                    EVENT, await self._events.description_for(turn.session_id, observed)
+                    EVENT,
+                    await self._events.description_for(
+                        turn.session_id,
+                        turn.target_npc_id,
+                        observed.position if observed else None,
+                    ),
                 ),
                 ContextSection(WORLD, _world(observed, snapshot.candidate_count)),
                 ContextSection(HISTORY, _history(history)),

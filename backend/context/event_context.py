@@ -17,7 +17,7 @@ from backend.ingestion.message_validation import (
     EVENT_STATUS_STARTED,
     EVENT_STATUS_UPDATED,
     GameEvent,
-    NpcObservation,
+    Vector3,
 )
 from backend.orchestration.event_relevance import (
     ROLE_ACTOR,
@@ -25,11 +25,8 @@ from backend.orchestration.event_relevance import (
     ROLE_RESPONDER,
     ROLE_TARGET,
     ROLE_WITNESS,
-    UNRELATED_RELEVANCE,
     EventRadii,
-    ordered_roles,
-    relevance_of,
-    roles_in,
+    strongest_involvement,
 )
 
 INVOLVEMENT_FOR_ROLE = {
@@ -60,25 +57,16 @@ class ActiveEvents:
         self._radii = radii
 
     async def description_for(
-        self, session_id: str, observed: NpcObservation | None
+        self, session_id: str, npc_id: str, position: Vector3 | None
     ) -> str:
-        """One event described, or nothing when none involves this NPC.
-
-        An NPC the current snapshot no longer observes has no position, and therefore no
-        current involvement to describe — the same silence the world section keeps about it.
-        """
-        if observed is None:
+        """One event described, or nothing when none involves this NPC."""
+        involvement = strongest_involvement(
+            npc_id, position, await self._events.active(session_id), self._radii
+        )
+        if involvement is None:
             return ""
-
-        described = ""
-        strongest = UNRELATED_RELEVANCE
-        for stored in await self._events.active(session_id):
-            roles = roles_in(observed.npc_id, observed.position, stored, self._radii)
-            relevance = relevance_of(roles)
-            if relevance > strongest:
-                strongest = relevance
-                described = describe_event(stored.event, ordered_roles(roles))
-        return described
+        stored, roles = involvement
+        return describe_event(stored.event, roles)
 
 
 def describe_event(event: GameEvent, roles: tuple[str, ...]) -> str:
