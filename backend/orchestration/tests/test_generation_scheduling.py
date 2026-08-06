@@ -17,21 +17,19 @@ import pytest_asyncio
 
 from backend.ingestion.tests.canonical_messages import (
     CONVERSATION_ID,
-    EVENT_ID,
     GUARD,
-    SESSION_ID,
     SHOPKEEPER,
     THIEF,
     active_conversation,
     npc,
     world_snapshot,
 )
+from backend.orchestration.conversation_manager import ConversationState
 from backend.orchestration.observations import (
     GENERATION_SUPPRESSED,
     WORK_CANCELLED,
     WORK_SUPERSEDED,
 )
-from backend.orchestration.conversation_manager import ConversationState
 from backend.orchestration.router_port import AttentionTier
 from backend.orchestration.tests.fake_routers import EventAwareRouter, TierScriptRouter
 from backend.orchestration.tests.harness import Harness, running, settings_for

@@ -344,7 +344,6 @@ class GenerationCoordinator:
             return self._request(
                 work,
                 context,
-                trigger=(work.turn.conversation_id, work.turn.turn_id),
                 conversation_id=work.turn.conversation_id,
                 turn_id=work.turn.turn_id,
                 event_id=None,
@@ -358,7 +357,6 @@ class GenerationCoordinator:
         return self._request(
             work,
             context,
-            trigger=(work.event.event_id, str(work.event.event_revision)),
             conversation_id=None,
             turn_id=None,
             event_id=work.event.event_id,
@@ -373,23 +371,24 @@ class GenerationCoordinator:
         work: Generation,
         context: GenerationContext,
         *,
-        trigger: tuple[str | None, str | None],
         conversation_id: str | None,
         turn_id: str | None,
         event_id: str | None,
     ) -> GenerationRequest:
-        """``trigger`` is what makes this request distinct for this NPC in this session, so a
-        retry of the same work reuses the same identifiers and a new trigger never collides."""
+        """The claim key already says what makes this work distinct, so the request identity is
+        derived from it: a retry of the same work reuses it, and different work cannot collide.
+
+        Deriving it from the trigger's own identifiers instead is not enough. Two promotions of
+        the same NPC off the same event revision differ only by the snapshot that promoted them,
+        which appears in the claim key and nowhere else.
+        """
         render = (
             render_focused_prompt
             if work.tier is AttentionTier.FOCUSED
             else render_reactive_prompt
         )
         return GenerationRequest(
-            request_id=(
-                "request-"
-                f"{identity_digest(work.session_id, work.npc_id, work.trigger.value, *trigger)}"
-            ),
+            request_id=f"request-{identity_digest(work.claim_key)}",
             session_id=work.session_id,
             npc_id=work.npc_id,
             npc_name=context.npc.name,
