@@ -20,7 +20,9 @@ from backend.ingestion.tests.canonical_messages import (
     TURN_ID,
     active_conversation,
 )
+from backend.models.mock_provider import MODEL_FOR_TIER, PROVIDER
 from backend.orchestration.conversation_manager import ConversationState
+from backend.orchestration.router_port import AttentionTier
 from backend.orchestration.deduplication import ATTEMPTED, FAILED
 from backend.orchestration.observations import (
     PROVIDER_OUTCOME_UNKNOWN,
@@ -156,7 +158,10 @@ async def test_the_recovered_attempt_is_reported_once_and_then_closed(
         assert len(facts) == 1
         assert facts[0].status == STATUS_ERROR
         assert facts[0].fallback_used is True
-        assert facts[0].provider is None
+        # The call really was made before the process died, and Elson & Daniel count attempts
+        # per provider, so the recovered fact names the provider from the attempt row.
+        assert facts[0].provider == PROVIDER
+        assert facts[0].model == MODEL_FOR_TIER[AttentionTier.FOCUSED]
 
 
 async def test_a_third_start_finds_nothing_left_to_recover(tmp_path: Path) -> None:

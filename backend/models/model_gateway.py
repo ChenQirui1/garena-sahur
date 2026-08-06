@@ -66,7 +66,38 @@ class ProviderTimeout(DeadlineExceeded):
     """A provider did not answer inside its tier's budget, and the attempt is spent."""
 
 
+# The team's handoff contract §21.10 gives the error-code vocabulary in upper snake case, and
+# §23's worked timeout example names `MODEL_TIMEOUT`. `docs/message_schemas.md` §7 requires a
+# "stable machine-readable" code but lists none, so these are the team's words, not ours.
+ERROR_CODE_FOR: dict[type[BaseException], str] = {
+    ProviderTimeout: "MODEL_TIMEOUT",
+    EmptyGeneration: "INVALID_MODEL_RESPONSE",
+}
+DEFAULT_ERROR_CODE = "PROVIDER_ERROR"
+
+
+def error_code_for(failure: BaseException) -> str:
+    for kind, code in ERROR_CODE_FOR.items():
+        if isinstance(failure, kind):
+            return code
+    return DEFAULT_ERROR_CODE
+
+
+@dataclass(frozen=True, slots=True)
+class ProviderIdentity:
+    """Who would answer a request, knowable without waiting for the answer.
+
+    A timeout still has to name the provider and model it was waiting on — the handoff
+    contract's §23 failure example populates both — so identity cannot live only on a result.
+    """
+
+    provider: str
+    model: str
+
+
 class Provider(Protocol):
+    def identity(self, tier: AttentionTier) -> ProviderIdentity: ...
+
     async def generate(self, request: GenerationRequest) -> GeneratedBehaviour: ...
 
 
@@ -81,6 +112,11 @@ class ModelGateway:
         self._providers = {AttentionTier.FOCUSED: focused, AttentionTier.REACTIVE: reactive}
         self._deadlines = deadlines
         self._timeouts_ms = timeouts_ms
+
+    def identity_for(self, tier: AttentionTier) -> ProviderIdentity | None:
+        """Who a request for this tier reaches, or `None` when nothing would be called."""
+        provider = self._providers.get(tier)
+        return None if provider is None else provider.identity(tier)
 
     async def generate(self, request: GenerationRequest) -> GeneratedBehaviour:
         provider = self._providers.get(request.tier)

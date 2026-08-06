@@ -10,6 +10,7 @@ from backend.models.model_gateway import (
     GeneratedBehaviour,
     GenerationRequest,
     ModelGateway,
+    ProviderIdentity,
 )
 from backend.orchestration.clock import AsyncioDeadlines
 from backend.orchestration.router_port import AttentionTier
@@ -41,6 +42,9 @@ def request_for(tier: AttentionTier, **overrides: object) -> GenerationRequest:
 
 
 class SilentProvider:
+    def identity(self, tier: AttentionTier) -> ProviderIdentity:
+        return ProviderIdentity(provider="silent", model="silent")
+
     async def generate(self, request: GenerationRequest) -> GeneratedBehaviour:
         return GeneratedBehaviour(
             dialogue="   ",

@@ -43,9 +43,11 @@ from backend.orchestration.telemetry_port import (
     TelemetryPort,
 )
 
-# `docs/message_schemas.md` §7 defines no error-code vocabulary, so this names the one case the
-# document does not describe rather than borrowing a code that means something else.
-UNKNOWN_OUTCOME_ERROR_CODE = "UnknownProviderOutcome"
+# The handoff contract's §21.10 vocabulary (`MODEL_TIMEOUT`, `PROVIDER_RATE_LIMIT`,
+# `INVALID_MODEL_RESPONSE`, `REQUEST_CANCELLED_AS_STALE`) has no code for an outcome lost with
+# the process, so this follows its upper-snake convention rather than inventing a new style.
+# It is the one genuinely new code in the backend, and #3 owns confirming it.
+UNKNOWN_OUTCOME_ERROR_CODE = "UNKNOWN_PROVIDER_OUTCOME"
 
 
 @dataclass(frozen=True, slots=True)
@@ -101,7 +103,13 @@ class Recovery:
                 request_id=attempt.request_id,
             )
             self._telemetry.record_model_call(
-                _unknown_outcome_fact(attempt.started_at_ms, self._clock.now_ms(), request)
+                _unknown_outcome_fact(
+                    attempt.started_at_ms,
+                    self._clock.now_ms(),
+                    request,
+                    provider=attempt.request.get("provider"),
+                    model=attempt.request.get("model"),
+                )
             )
             # Closing before publishing means a crash during recovery cannot answer the same
             # attempt twice; the stored command is then what the next start finds.
@@ -144,20 +152,25 @@ class Recovery:
 
 
 def _unknown_outcome_fact(
-    started_at_ms: int, completed_at_ms: int, request: GenerationRequest
+    started_at_ms: int,
+    completed_at_ms: int,
+    request: GenerationRequest,
+    provider: str | None,
+    model: str | None,
 ) -> ModelCallFact:
     """The spent attempt, reported once by the process that found it unresolved.
 
-    `provider` and `model` stay `null`: §7 allows that for a request that failed before
-    selection, and nothing here knows whether the previous process got that far.
+    The provider and model come from the attempt row, because the call really was made and
+    Elson & Daniel count attempts per provider. They are `null` only when the previous process
+    had not selected one — the case §7 is explicit that null is for.
     """
     return ModelCallFact(
         session_id=request.session_id,
         request_id=request.request_id,
         npc_id=request.npc_id,
         tier=request.tier.value,
-        provider=None,
-        model=None,
+        provider=provider,
+        model=model,
         event_id=request.event_id,
         conversation_id=request.conversation_id,
         turn_id=request.turn_id,

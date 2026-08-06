@@ -21,7 +21,12 @@ from backend.ingestion.tests.canonical_messages import (
     SHOPKEEPER,
     active_conversation,
 )
-from backend.models.model_gateway import GeneratedBehaviour, GenerationRequest
+from backend.models.mock_provider import MODEL_FOR_TIER, PROVIDER
+from backend.models.model_gateway import (
+    GeneratedBehaviour,
+    GenerationRequest,
+    ProviderIdentity,
+)
 from backend.orchestration.conversation_manager import ConversationState
 from backend.orchestration.observations import (
     FALLBACK_USED,
@@ -42,6 +47,9 @@ class BrokenProvider:
 
     def __init__(self) -> None:
         self.started: list[GenerationRequest] = []
+
+    def identity(self, tier: AttentionTier) -> ProviderIdentity:
+        return ProviderIdentity(provider="broken", model="broken-model")
 
     async def generate(self, request: GenerationRequest) -> GeneratedBehaviour:
         self.started.append(request)
@@ -122,8 +130,12 @@ async def test_a_timed_out_attempt_is_reported_as_one_failed_model_call(
         assert len(held.telemetry.model_calls) == 1
         fact = held.telemetry.model_calls[0]
         assert fact.status == STATUS_ERROR
-        assert fact.provider is None and fact.model is None
-        assert fact.error_code == "ProviderTimeout"
+        # Handoff contract §23: a timeout names the provider it was waiting on, and §21.9 pairs
+        # the failed primary with fallback_used.
+        assert fact.provider == PROVIDER
+        assert fact.model == MODEL_FOR_TIER[AttentionTier.FOCUSED]
+        assert fact.error_code == "MODEL_TIMEOUT"
+        assert fact.fallback_used is True
         assert fact.output_tokens == 0
 
 
@@ -143,7 +155,8 @@ async def test_a_failing_provider_falls_back_without_retrying(tmp_path: Path) ->
         assert len(failing.publisher.published) == 1
         assert failing.publisher.published[0].fallback_used is True
         assert failing.observed(MODEL_CALL_FAILED)
-        assert failing.telemetry.model_calls[0].error_code == "RuntimeError"
+        assert failing.telemetry.model_calls[0].error_code == "PROVIDER_ERROR"
+        assert failing.telemetry.model_calls[0].provider == "broken"
 
 
 async def test_a_fallback_command_still_marks_the_conversation_ready(

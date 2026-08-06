@@ -29,7 +29,9 @@ from backend.models.model_gateway import (
     GenerationRequest,
     ModelGateway,
     NoProviderForTier,
+    ProviderIdentity,
     ProviderTimeout,
+    error_code_for,
 )
 from backend.models.prompts.focused_prompt import render_focused_prompt
 from backend.models.prompts.reactive_prompt import render_reactive_prompt
@@ -264,7 +266,11 @@ class GenerationCoordinator:
 
         request = await self._request_for(work, snapshot)
         started_at_ms = self.clock.now_ms()
-        await self.attempts.open(work.claim_key, _attempt_record(request), started_at_ms)
+        await self.attempts.open(
+            work.claim_key,
+            _attempt_record(request, self.gateway.identity_for(request.tier)),
+            started_at_ms,
+        )
 
         try:
             behaviour = await self.gateway.generate(request)
@@ -486,9 +492,13 @@ class GenerationCoordinator:
     ) -> None:
         """A spent attempt is always reported, whether it failed or ran out of time.
 
-        `docs/message_schemas.md` §7 defines no error-code vocabulary, so the exception's own
-        type name is used and a timeout is named separately rather than being invented into a
-        shared taxonomy.
+        The provider and model are named. `docs/message_schemas.md` §7 allows them to be null
+        only when a request "fails before selection", which a timeout is not: the provider was
+        chosen and called. The team's handoff contract §23 shows both populated on a timeout,
+        and Elson & Daniel's timeout rate is per provider, so nulling them would hide the call.
+
+        `fallback_used` is true because this failure is always followed by fallback content —
+        handoff contract §21.9 asks for exactly that pairing.
         """
         timed_out = isinstance(failure, ProviderTimeout)
         self.observations.note(
@@ -497,14 +507,15 @@ class GenerationCoordinator:
             npc_id=request.npc_id,
             reason=repr(failure),
         )
+        identity = self.gateway.identity_for(request.tier)
         self.telemetry.record_model_call(
             ModelCallFact(
                 session_id=request.session_id,
                 request_id=request.request_id,
                 npc_id=request.npc_id,
                 tier=request.tier.value,
-                provider=None,
-                model=None,
+                provider=identity.provider if identity else None,
+                model=identity.model if identity else None,
                 event_id=request.event_id,
                 conversation_id=request.conversation_id,
                 turn_id=request.turn_id,
@@ -514,8 +525,8 @@ class GenerationCoordinator:
                 input_tokens=request.estimated_input_tokens,
                 output_tokens=0,
                 status=STATUS_ERROR,
-                fallback_used=False,
-                error_code=type(failure).__name__,
+                fallback_used=True,
+                error_code=error_code_for(failure),
             )
         )
 
@@ -541,14 +552,18 @@ class GenerationCoordinator:
         )
 
 
-def _attempt_record(request: GenerationRequest) -> dict[str, Any]:
+def _attempt_record(
+    request: GenerationRequest, identity: ProviderIdentity | None
+) -> dict[str, Any]:
     """Everything recovery needs to answer this request without repeating it.
 
     The prompt is deliberately absent: recovery never calls a provider, so the one thing it
     cannot use is the only large field. What it keeps is what chooses fallback content and what
-    stamps the resulting command.
+    stamps the resulting command, and who the spent call was waiting on.
     """
     return {
+        "provider": identity.provider if identity else None,
+        "model": identity.model if identity else None,
         "request_id": request.request_id,
         "session_id": request.session_id,
         "npc_id": request.npc_id,

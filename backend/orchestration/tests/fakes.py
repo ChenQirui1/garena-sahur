@@ -14,7 +14,12 @@ from contextlib import asynccontextmanager
 from dataclasses import dataclass
 from typing import AsyncIterator, Callable
 
-from backend.models.model_gateway import GeneratedBehaviour, GenerationRequest, Provider
+from backend.models.model_gateway import (
+    GeneratedBehaviour,
+    GenerationRequest,
+    Provider,
+    ProviderIdentity,
+)
 from backend.orchestration.behaviour_command import BehaviourCommand
 from backend.orchestration.clock import DeadlineExceeded
 from backend.orchestration.command_store import CommandStore, StoredCommand
@@ -177,6 +182,9 @@ class GatedProvider:
         self._peak_by_npc: Counter[str] = Counter()
         if gated:
             self.gate()
+
+    def identity(self, tier: AttentionTier) -> ProviderIdentity:
+        return self._inner.identity(tier)
 
     def gate(self) -> None:
         """Hold every call from here on until `release_all`."""
