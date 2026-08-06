@@ -28,10 +28,15 @@ from backend.orchestration.conversation_manager import ConversationState
 from backend.orchestration.observations import (
     GENERATION_SUPPRESSED,
     WORK_CANCELLED,
+    WORK_FAILED,
     WORK_SUPERSEDED,
 )
 from backend.orchestration.router_port import AttentionTier
-from backend.orchestration.tests.fake_routers import EventAwareRouter, TierScriptRouter
+from backend.orchestration.tests.fake_routers import (
+    EventAwareRouter,
+    FlakyRouter,
+    TierScriptRouter,
+)
 from backend.orchestration.tests.harness import Harness, running, settings_for
 
 FOCUSED = AttentionTier.FOCUSED
@@ -161,20 +166,83 @@ async def test_expired_behaviour_during_an_active_conversation_generates_again(
     assert len(conversation.published_for(SHOPKEEPER)) == 2
 
 
-async def test_expiry_without_an_active_event_or_conversation_never_calls_a_provider(
-    conversation: Harness,
+async def test_expired_behaviour_during_an_active_event_generates_again(
+    tmp_path: Path,
 ) -> None:
-    await conversation.snapshot(sequence=1, active_conversation=active_conversation())
-    await conversation.turn()
-    await conversation.settle()
-    assert len(conversation.published_for(SHOPKEEPER)) == 1
+    """Expiry is eligible on an active event, not only on an active conversation."""
+    router = TierScriptRouter({SHOPKEEPER: REACTIVE, THIEF: REACTIVE})
+    async for harness in running(settings_for(tmp_path), router=router):
+        await harness.snapshot(sequence=1)
+        await harness.settle()
+        await harness.event(actor_npc_ids=[THIEF], target_npc_ids=[SHOPKEEPER])
+        await harness.settle()
+        assert len(harness.published_for(SHOPKEEPER)) == 1
 
-    # The conversation ends, so nothing requires foreground behaviour any more.
-    conversation.clock.advance(15_001)
-    await conversation.snapshot(sequence=2, active_conversation=None)
-    await conversation.settle()
+        harness.clock.advance(15_001)
+        await harness.snapshot(sequence=2)
+        await harness.settle()
 
-    assert len(conversation.published_for(SHOPKEEPER)) == 1
+        assert len(harness.published_for(SHOPKEEPER)) == 2
+        assert harness.observed(WORK_FAILED) == []
+
+
+async def test_expiry_with_nothing_left_to_speak_about_never_calls_a_provider(
+    tmp_path: Path,
+) -> None:
+    """The NPC keeps its tier, so only the missing focus can suppress this one.
+
+    Holding the tier is the whole point: if the router demoted the shopkeeper when the
+    conversation ended, the tier check would stop the work and this test would pass without
+    ever reaching the rule it names.
+    """
+    router = TierScriptRouter({SHOPKEEPER: FOCUSED})
+    async for harness in running(settings_for(tmp_path), router=router):
+        await harness.snapshot(sequence=1, active_conversation=active_conversation())
+        await harness.turn()
+        await harness.settle()
+        assert len(harness.published_for(SHOPKEEPER)) == 1
+
+        # The conversation ends and no event is active, so nothing requires foreground work.
+        harness.clock.advance(15_001)
+        await harness.snapshot(sequence=2, active_conversation=None)
+        await harness.settle()
+
+        assert len(harness.published_for(SHOPKEEPER)) == 1
+        assert harness.telemetry.model_calls[-1].turn_id == "turn-004"
+        assert harness.observed(WORK_FAILED) == []
+
+
+async def test_a_router_failure_does_not_cancel_work_already_queued(
+    tmp_path: Path,
+) -> None:
+    """Failing closed means inventing no assignment, not discarding queued work."""
+    router = FlakyRouter(TierScriptRouter({SHOPKEEPER: REACTIVE, THIEF: REACTIVE}))
+    async for harness in running(
+        settings_for(tmp_path, focused_concurrency=1, reactive_concurrency=1, total_concurrency=1),
+        router=router,
+        gated=True,
+    ):
+        await harness.snapshot(sequence=1)
+        await harness.settle_routing()
+
+        await harness.event(actor_npc_ids=[THIEF], target_npc_ids=[SHOPKEEPER])
+        await harness.provider.started_after(1)
+        queued = THIEF if harness.provider.started[0].npc_id == SHOPKEEPER else SHOPKEEPER
+        assert harness.pending_generation_count() == 1
+
+        router.failing = True
+        await harness.snapshot(sequence=2)
+        await harness.settle_routing()
+        assert harness.observed(WORK_CANCELLED) == []
+        assert harness.pending_generation_count() == 1
+
+        router.failing = False
+        await harness.snapshot(sequence=3)
+        await harness.settle_routing()
+        harness.provider.release_all()
+        await harness.settle()
+
+    assert len(harness.published_for(queued)) == 1
 
 
 async def test_a_newer_turn_supersedes_pending_event_work_for_the_same_npc(

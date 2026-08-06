@@ -29,6 +29,7 @@ COMMAND_NOT_PUBLISHED = "command_not_published"
 WORK_SUPERSEDED = "work_superseded"
 WORK_CANCELLED = "work_cancelled"
 WORK_REFUSED = "work_refused"
+WORK_FAILED = "work_failed"
 
 
 @dataclass(frozen=True, slots=True)

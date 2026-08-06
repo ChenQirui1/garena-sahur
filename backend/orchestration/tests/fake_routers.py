@@ -120,6 +120,22 @@ class TierScriptRouter:
         self._previous.clear()
 
 
+class FlakyRouter:
+    """Wraps another router and fails on demand, so a transient outage can be staged."""
+
+    def __init__(self, inner: object, failing: bool = False) -> None:
+        self.inner = inner
+        self.failing = failing
+
+    def route(self, snapshot: RoutingSnapshot) -> RoutingResult:
+        if self.failing:
+            raise RuntimeError("router is briefly unavailable")
+        return self.inner.route(snapshot)  # type: ignore[attr-defined]
+
+    def reset_session(self, session_id: str) -> None:
+        return None
+
+
 class RaisingRouter:
     def __init__(self, failure: Exception | None = None) -> None:
         self.failure = failure or RuntimeError("router exploded")

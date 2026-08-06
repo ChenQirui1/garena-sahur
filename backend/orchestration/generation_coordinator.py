@@ -38,6 +38,7 @@ from backend.orchestration.conversation_manager import ConversationManager
 from backend.orchestration.event_relevance import EventRadii, ordered_roles, roles_in
 from backend.orchestration.generation_policy import (
     GENERATING_TIERS,
+    CurrentFacts,
     Focus,
     Generation,
     Trigger,
@@ -45,6 +46,7 @@ from backend.orchestration.generation_policy import (
     decide_for_expiry,
     decide_for_promotion,
     decide_for_turn,
+    is_still_current,
 )
 from backend.orchestration.generation_scheduler import GenerationScheduler
 from backend.orchestration.observations import (
@@ -182,37 +184,34 @@ class GenerationCoordinator:
     # ---- executor -----------------------------------------------------------------
 
     async def is_current(self, work: Generation) -> str | None:
-        """Why this work is no longer worth doing, or ``None`` while it still is."""
+        """Gather what the stores say about this work, and let policy judge it."""
         outcome = self.handoff.latest_outcome(work.session_id, work.world_id)
-        if outcome is None or outcome.status is not RoutingStatus.ROUTED:
-            return "no current routing result"
-
-        assignment = next(
-            (one for one in outcome.assignments if one.npc_id == work.npc_id), None
+        routed = outcome is not None and outcome.status is RoutingStatus.ROUTED
+        stored = (
+            await self.events.latest(work.session_id, work.event.event_id)
+            if routed and work.event is not None
+            else None
         )
-        if assignment is None:
-            return "npc is no longer a routed candidate"
-        if assignment.tier not in GENERATING_TIERS:
-            return f"npc is {assignment.tier.value}"
-
-        if work.event is not None:
-            stored = await self.events.latest(work.session_id, work.event.event_id)
-            if stored is None:
-                return "the event is no longer stored"
-            if stored.event.is_terminal:
-                return f"event {stored.event.status}"
-            if (
-                work.trigger is Trigger.EVENT
-                and stored.event.event_revision != work.event.event_revision
-            ):
-                return "a newer revision superseded this one"
-
-        if work.trigger is Trigger.EXPIRY:
-            behaviour = await self.commands.latest_for(work.session_id, work.npc_id)
-            if behaviour is not None and behaviour.command_id != work.expired_command_id:
-                return "newer behaviour replaced the expired command"
-
-        return None
+        return is_still_current(
+            work,
+            CurrentFacts(
+                routed=routed,
+                assignment=(
+                    next(
+                        (one for one in outcome.assignments if one.npc_id == work.npc_id),
+                        None,
+                    )
+                    if routed and outcome is not None
+                    else None
+                ),
+                stored_event=stored.event if stored is not None else None,
+                latest_behaviour=(
+                    await self.commands.latest_for(work.session_id, work.npc_id)
+                    if routed and work.trigger is Trigger.EXPIRY
+                    else None
+                ),
+            ),
+        )
 
     async def generate(self, work: Generation) -> BehaviourCommand | None:
         """Call the provider once and turn what comes back into a command. Never publishes."""

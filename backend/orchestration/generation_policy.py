@@ -199,6 +199,48 @@ def decide_for_event(
     return EventPolicyDecision(tuple(generations), tuple(suppressed))
 
 
+@dataclass(frozen=True, slots=True)
+class CurrentFacts:
+    """What the stores say right now about the reason a piece of work exists."""
+
+    routed: bool
+    assignment: RoutingAssignment | None
+    stored_event: GameEvent | None = None
+    latest_behaviour: BehaviourCommand | None = None
+
+
+def is_still_current(work: Generation, facts: CurrentFacts) -> str | None:
+    """Why this work is no longer worth doing, or ``None`` while it still is.
+
+    Deciding whether to generate and deciding whether to *still* generate are the same question
+    asked at two different times, so both live here. The caller gathers the facts, because only
+    it can reach the stores.
+    """
+    if not facts.routed:
+        return "no current routing result"
+    if facts.assignment is None:
+        return "npc is no longer a routed candidate"
+    if facts.assignment.tier not in GENERATING_TIERS:
+        return f"npc is {facts.assignment.tier.value}"
+
+    if work.event is not None:
+        if facts.stored_event is None:
+            return "the event is no longer stored"
+        if facts.stored_event.is_terminal:
+            return f"event {facts.stored_event.status}"
+        if (
+            work.trigger is Trigger.EVENT
+            and facts.stored_event.event_revision != work.event.event_revision
+        ):
+            return "a newer revision superseded this one"
+
+    if work.trigger is Trigger.EXPIRY and facts.latest_behaviour is not None:
+        if facts.latest_behaviour.command_id != work.expired_command_id:
+            return "newer behaviour replaced the expired command"
+
+    return None
+
+
 def decide_for_promotion(
     assignment: RoutingAssignment,
     outcome: RoutingOutcome,

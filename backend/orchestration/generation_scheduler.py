@@ -26,6 +26,7 @@ from backend.orchestration.generation_policy import Generation, Trigger
 from backend.orchestration.generation_queue import GenerationQueue
 from backend.orchestration.observations import (
     WORK_CANCELLED,
+    WORK_FAILED,
     WORK_REFUSED,
     WORK_SUPERSEDED,
     Observations,
@@ -162,8 +163,17 @@ class GenerationScheduler:
             await self._execute(work)
         except asyncio.CancelledError:
             raise
-        except Exception:
+        except Exception as failure:
+            # A log alone is not enough: an exception swallowed here once hid a duplicate
+            # command identity behind a test that looked green.
             logger.exception("generation work failed for %s", work.npc_id)
+            self._observations.note(
+                WORK_FAILED,
+                session_id=work.session_id,
+                npc_id=work.npc_id,
+                trigger=work.trigger.value,
+                reason=repr(failure),
+            )
         finally:
             self._queue.release(work)
 
