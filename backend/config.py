@@ -27,6 +27,9 @@ class Settings(BaseSettings):
         frozen=True,
     )
 
+    # Deployment knobs, not contract-derived: no shared document constrains where the process
+    # binds or where it keeps its files, so these carry no citation rather than a borrowed one.
+    # Every field below this block traces to a source, and none of them bounds upstream data.
     host: str = "127.0.0.1"
     port: int = Field(default=8000, ge=1, le=65535)
     log_level: str = "info"
@@ -66,9 +69,8 @@ class Settings(BaseSettings):
     # against a deterministic character estimate rather than a real encoder.
     characters_per_token: int = Field(default=4, gt=0)
 
-    # Specification #1: Focused context is capped at 2,000 input and 120 output tokens and may
-    # include up to eight recent turns; Reactive is capped at 600 and 40 and sees only the
-    # triggering turn, which is why no Reactive history setting exists to sit beside these.
+    # Specification #1: these five ceilings are its numbers. Reactive sees only the triggering
+    # turn, which is why no Reactive history setting sits beside the Focused one.
     focused_input_token_limit: int = Field(default=2_000, gt=0)
     focused_output_token_limit: int = Field(default=120, gt=0)
     focused_history_turns: int = Field(default=8, ge=0)

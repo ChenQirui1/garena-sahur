@@ -250,12 +250,7 @@ async def test_an_invalid_snapshot_is_rejected_before_state_changes(backend: Bac
 async def test_a_snapshot_is_never_rejected_for_the_size_of_its_candidate_set(
     backend: Backend,
 ) -> None:
-    """No source bounds `npcs`, so a dense world routes like a sparse one.
-
-    200 candidates is past the 128 an earlier invented cap refused. `docs/message_schemas.md`
-    places no limit on the array, and issue #2 — which owns inbound size limits — has confirmed
-    none, so the only rule left is that `candidate_count` agrees with the array.
-    """
+    """No source bounds `npcs`, so a dense candidate set routes like a sparse one (#2)."""
     crowd = [npc(f"villager-{index}") for index in range(200)]
 
     code, body = await ingest(
