@@ -1,11 +1,9 @@
 """Public package surface for Spotlight's Attention Router.
 
 Owner: Elson & Daniel
-
-The concrete Router is added when routing behaviour is implemented. For now the package
-exports only the shared contracts required by the upcoming Router modules.
 """
 
+from backend.router.config import RouterConfig
 from backend.router.models import (
     RESULT_SCHEMA_VERSION,
     RESULT_TYPE,
@@ -23,6 +21,7 @@ from backend.router.models import (
     RoutingResult,
     RoutingSnapshot,
 )
+from backend.router.router import Router, StaleSnapshotError
 
 __all__ = [
     "RESULT_SCHEMA_VERSION",
@@ -33,6 +32,8 @@ __all__ = [
     "AttentionEdge",
     "AttentionTier",
     "CandidatePolicy",
+    "Router",
+    "RouterConfig",
     "RouterConversationState",
     "RouterInput",
     "RouterPort",
@@ -40,4 +41,5 @@ __all__ = [
     "RoutingNpc",
     "RoutingResult",
     "RoutingSnapshot",
+    "StaleSnapshotError",
 ]
