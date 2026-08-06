@@ -27,7 +27,11 @@ from backend.ingestion.tests.canonical_messages import (
 from backend.main import Adapters, create_app
 from backend.orchestration.router_handoff import RouterHandoff
 from backend.orchestration.router_port import RouterPort
-from backend.orchestration.tests.fake_routers import RaisingRouter, RecordingRouter
+from backend.orchestration.tests.fake_routers import (
+    RaisingRouter,
+    RecordingRouter,
+    ReportingRouter,
+)
 
 
 class Backend(NamedTuple):
@@ -322,3 +326,25 @@ async def test_liveness_and_readiness_distinguish_running_from_ready(
         async with LifespanManager(app):
             ready = await client.get("/health/ready")
             assert (ready.status_code, ready.json()) == (200, {"status": "ready"})
+
+
+async def test_reported_counts_and_diagnostics_reach_the_development_projection(
+    tmp_path: Path,
+) -> None:
+    """A field the Router did report must survive the projection, not only the outcome."""
+    async with backend_for(ReportingRouter(), tmp_path) as backend:
+        await ingest(
+            backend,
+            TOPIC_WORLD_SNAPSHOT,
+            world_snapshot(sequence=1842, active_conversation=active_conversation()),
+        )
+        code, body = await observe_routing(backend)
+
+    assert code == 200
+    assert body["counts"] == {"focused": 1, "reactive": 0, "ambient": 1}
+    assert body["diagnostics"] == {
+        "focused_capacity": 2,
+        "reactive_capacity": 6,
+        "candidate_count": 2,
+        "routing_time_ms": 0.31,
+    }

@@ -5,7 +5,6 @@ Owner: Jerome & Richard
 
 from __future__ import annotations
 
-from dataclasses import asdict
 from typing import TYPE_CHECKING, Annotated, Any, cast
 
 from fastapi import APIRouter, Depends, Request, Response, status
@@ -13,6 +12,7 @@ from pydantic import BaseModel, ConfigDict
 
 from backend.ingestion.intake_service import IntakeOutcome, IntakeResult, IntakeService
 from backend.orchestration.router_handoff import RouterHandoff, RoutingOutcome
+from backend.orchestration.router_port import RoutingDiagnostics, TierCounts
 
 if TYPE_CHECKING:
     from backend.main import Pipeline
@@ -135,8 +135,29 @@ def _as_routing_body(outcome: RoutingOutcome) -> dict[str, Any]:
             }
             for assignment in outcome.assignments
         ],
-        "counts": asdict(outcome.counts) if outcome.counts is not None else None,
-        "diagnostics": (
-            asdict(outcome.diagnostics) if outcome.diagnostics is not None else None
-        ),
+        "counts": _as_counts_body(outcome.counts),
+        "diagnostics": _as_diagnostics_body(outcome.diagnostics),
+    }
+
+
+def _as_counts_body(counts: TierCounts | None) -> dict[str, int] | None:
+    if counts is None:
+        return None
+    return {
+        "focused": counts.focused,
+        "reactive": counts.reactive,
+        "ambient": counts.ambient,
+    }
+
+
+def _as_diagnostics_body(
+    diagnostics: RoutingDiagnostics | None,
+) -> dict[str, float] | None:
+    if diagnostics is None:
+        return None
+    return {
+        "focused_capacity": diagnostics.focused_capacity,
+        "reactive_capacity": diagnostics.reactive_capacity,
+        "candidate_count": diagnostics.candidate_count,
+        "routing_time_ms": diagnostics.routing_time_ms,
     }

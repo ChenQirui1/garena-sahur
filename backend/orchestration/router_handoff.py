@@ -38,9 +38,9 @@ class RoutingStatus(StrEnum):
 class RoutingOutcome:
     """What the Router produced for one routed snapshot, or why nothing was produced.
 
-    `counts` and `diagnostics` stay `None` when the Router sent none, so a consumer that needs
-    the capacities — validating them is #10's — can tell "the Router did not report them" from
-    "the Router reported them and they held".
+    `counts` and `diagnostics` stay `None` when the Router sent none, so a consumer can tell
+    "the Router did not report them" from "the Router reported them and they held". Today's
+    Router reports neither, which is why absence is not a failure.
     """
 
     session_id: str
@@ -274,16 +274,19 @@ def _reject_reason(result: object, snapshot: RoutingSnapshot) -> str | None:
             return f"{assignment.npc_id} was assigned more than once"
         assigned.add(assignment.npc_id)
 
-    return _reject_count_reason(result)
+    return _reject_reported_totals_reason(result)
 
 
-def _reject_count_reason(result: RoutingResult) -> str | None:
-    """Describe why a result's own counts and diagnostics cannot be trusted.
+def _reject_reported_totals_reason(result: RoutingResult) -> str | None:
+    """Describe why a result's own counts and diagnostics contradict its assignments.
 
-    Their absence is not a rejection: the Router that exists today reports neither, and
-    `docs/message_schemas.md` §5 states the invariants without saying the fields are required.
-    A result that contradicts itself is a rejection, because orchestration consumes the
-    assignments while capacity validation and routing telemetry read these.
+    Every comparison here is a result against itself, using the capacities the Router chose to
+    report. The backend neither reads `backend/router/config.py` nor decides a tier, so this
+    checks the invariants `docs/message_schemas.md` §5 states without duplicating the capacity
+    enforcement that produced them.
+
+    Absence is not a rejection: today's Router reports neither field, and §5 states the
+    invariants without saying the fields are required.
     """
     counts, diagnostics = result.counts, result.diagnostics
     if counts is not None and not isinstance(counts, TierCounts):

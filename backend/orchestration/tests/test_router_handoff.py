@@ -409,7 +409,7 @@ def documented_assignments() -> tuple[RoutingAssignment, ...]:
     )
 
 
-def diagnostics(**overrides: float) -> RoutingDiagnostics:
+def diagnostics(**overrides: Any) -> RoutingDiagnostics:
     documented: dict[str, Any] = documented_result()["diagnostics"]
     return RoutingDiagnostics(**(documented | overrides))
 
