@@ -10,14 +10,11 @@ split up behind it.
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import AsyncIterator
 
 import pytest
 import pytest_asyncio
-from asgi_lifespan import LifespanManager
-from httpx import ASGITransport, AsyncClient
 
-from backend.config import Settings
 from backend.ingestion.message_validation import validate_conversation_turn
 from backend.ingestion.tests.canonical_messages import (
     CONVERSATION_ID,
@@ -27,116 +24,21 @@ from backend.ingestion.tests.canonical_messages import (
     TURN_ID,
     active_conversation,
     conversation_turn,
-    world_snapshot,
 )
-from backend.main import Adapters, Pipeline, create_app
 from backend.orchestration.conversation_manager import ConversationState
+from backend.orchestration.development_router import AmbientOnlyRouter
 from backend.orchestration.observations import (
     GENERATION_SUPPRESSED,
     MISSING_PROFILE,
     UNCONFIRMED_TURN_DISCARDED,
 )
-from backend.orchestration.development_router import AmbientOnlyRouter
-from backend.orchestration.router_port import RouterPort
-from backend.orchestration.tests.fakes import ManualClock, RecordingPublisher, RecordingTelemetry
-from backend.orchestration.tests.fake_routers import RecordingRouter
-
-PROFILE_DOCUMENT = """
-{
-  "version": 1,
-  "profiles": [
-    {
-      "npc_id": "shopkeeper-uuid",
-      "name": "Mira",
-      "role": "market shopkeeper",
-      "persona": "Runs the bread stall and knows every regular by name.",
-      "speaking_style": "Warm, quick, a little breathless.",
-      "relationships": [{"npc_id": "thief-uuid", "relation": "wary of"}]
-    },
-    {
-      "npc_id": "thief-uuid",
-      "name": "Corin",
-      "role": "market thief",
-      "persona": "Light fingered and always three stalls ahead.",
-      "speaking_style": "Clipped and evasive.",
-      "relationships": []
-    }
-  ]
-}
-"""
-
-
-class Harness:
-    """The running service plus the fakes its trace ends at."""
-
-    def __init__(
-        self,
-        client: AsyncClient,
-        pipeline: Pipeline,
-        publisher: RecordingPublisher,
-        telemetry: RecordingTelemetry,
-        clock: ManualClock,
-        router: RecordingRouter,
-    ) -> None:
-        self.client = client
-        self.pipeline = pipeline
-        self.publisher = publisher
-        self.telemetry = telemetry
-        self.clock = clock
-        self.router = router
-
-    async def ingest(self, topic: str, message: dict[str, Any]) -> Any:
-        return await self.client.post("/ingest", json={"topic": topic, "message": message})
-
-    async def snapshot(self, **overrides: Any) -> Any:
-        return await self.ingest("world.snapshot", world_snapshot(**overrides))
-
-    async def turn(self, **overrides: Any) -> Any:
-        return await self.ingest("conversation.turn", conversation_turn(**overrides))
-
-    def state(self) -> ConversationState:
-        return self.pipeline.intake.conversation.state(SESSION_ID)
-
-    def observed(self, name: str) -> list[dict[str, object]]:
-        return [
-            dict(observation.fields)
-            for observation in self.pipeline.observations.recorded
-            if observation.name == name
-        ]
-
-
-def _settings(tmp_path: Path, profiles: str = PROFILE_DOCUMENT) -> Settings:
-    profile_path = tmp_path / "npc_profiles.json"
-    profile_path.write_text(profiles)
-    return Settings(
-        database_path=tmp_path / "state" / "spotlight.sqlite3",
-        npc_profiles_path=profile_path,
-    )
-
-
-async def _harness(
-    settings: Settings, router: RouterPort | None = None
-) -> AsyncIterator[Harness]:
-    clock = ManualClock()
-    publisher = RecordingPublisher()
-    telemetry = RecordingTelemetry()
-    router = router or RecordingRouter()
-    app = create_app(
-        settings,
-        Adapters(router=router, publisher=publisher, telemetry=telemetry, clock=clock),
-    )
-    pipeline: Pipeline = app.state.pipeline
-    publisher.bind(pipeline.commands)
-    async with LifespanManager(app):
-        transport = ASGITransport(app=app)
-        async with AsyncClient(transport=transport, base_url="http://backend") as client:
-            yield Harness(client, pipeline, publisher, telemetry, clock, router)
+from backend.orchestration.tests.harness import Harness, running, settings_for
 
 
 @pytest_asyncio.fixture
 async def harness(tmp_path: Path) -> AsyncIterator[Harness]:
-    async for running in _harness(_settings(tmp_path)):
-        yield running
+    async for started in running(settings_for(tmp_path)):
+        yield started
 
 
 async def test_an_active_conversation_and_one_turn_produce_one_command(
@@ -205,7 +107,7 @@ async def test_a_duplicate_turn_produces_no_second_command_or_model_call(
 
 async def test_an_ambient_target_never_reaches_a_provider(tmp_path: Path) -> None:
     """The turn addresses the active conversation, so only the tier can suppress it."""
-    async for ambient in _harness(_settings(tmp_path), AmbientOnlyRouter()):
+    async for ambient in running(settings_for(tmp_path), AmbientOnlyRouter()):
         await ambient.snapshot(active_conversation=active_conversation())
         await ambient.turn()
 
@@ -355,7 +257,7 @@ async def test_the_router_sees_the_conversation_projection_and_its_latest_turn(
     await harness.snapshot(active_conversation=active_conversation())
     await harness.turn()
 
-    routed = harness.router.routed[-1].active_conversation
+    routed = harness.routed[-1].active_conversation
     assert routed is not None
     assert routed.conversation_id == CONVERSATION_ID
     assert routed.target_npc_id == SHOPKEEPER
@@ -405,7 +307,7 @@ WITHOUT_THE_SHOPKEEPER = """
 async def test_an_unknown_npc_uses_a_generic_profile_and_records_the_gap(
     tmp_path: Path,
 ) -> None:
-    async for harness in _harness(_settings(tmp_path, WITHOUT_THE_SHOPKEEPER)):
+    async for harness in running(settings_for(tmp_path, WITHOUT_THE_SHOPKEEPER)):
         await harness.snapshot(active_conversation=active_conversation())
         await harness.turn()
 
@@ -415,7 +317,7 @@ async def test_an_unknown_npc_uses_a_generic_profile_and_records_the_gap(
 
 async def test_a_malformed_profile_document_fails_readiness(tmp_path: Path) -> None:
     broken = '{"version": 1, "profiles": [{"npc_id": "shopkeeper-uuid"}]}'
-    async for harness in _harness(_settings(tmp_path, broken)):
+    async for harness in running(settings_for(tmp_path, broken)):
         readiness = await harness.client.get("/health/ready")
         liveness = await harness.client.get("/health/live")
 

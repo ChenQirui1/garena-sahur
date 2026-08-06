@@ -20,8 +20,10 @@ RETAINED = 256
 
 MISSING_PROFILE = "missing_profile"
 GENERATION_SUPPRESSED = "generation_suppressed"
+EVENT_GENERATION_SUPPRESSED = "event_generation_suppressed"
 UNCONFIRMED_TURN_DISCARDED = "unconfirmed_turn_discarded"
 NO_WORLD_STATE = "no_world_state"
+ROUTING_NOT_REFRESHED = "routing_not_refreshed"
 MODEL_CALL_FAILED = "model_call_failed"
 COMMAND_NOT_PUBLISHED = "command_not_published"
 

@@ -12,6 +12,7 @@ from backend.orchestration.router_port import (
     RESULT_TYPE,
     AttentionTier,
     RoutingAssignment,
+    RoutingNpc,
     RoutingResult,
     RoutingSnapshot,
 )
@@ -43,14 +44,12 @@ class RecordingRouter:
 
     def route(self, snapshot: RoutingSnapshot) -> RoutingResult:
         self.routed.append(snapshot)
-        conversation = snapshot.active_conversation
-        target = conversation.target_npc_id if conversation else None
         return result_for(
             snapshot,
             tuple(
                 RoutingAssignment(
                     npc_id=npc.npc_id,
-                    tier=AttentionTier.FOCUSED if npc.npc_id == target else AttentionTier.AMBIENT,
+                    tier=self.tier_for(snapshot, npc),
                     previous_tier=None,
                     changed=True,
                 )
@@ -58,8 +57,28 @@ class RecordingRouter:
             ),
         )
 
+    def tier_for(self, snapshot: RoutingSnapshot, npc: RoutingNpc) -> AttentionTier:
+        conversation = snapshot.active_conversation
+        target = conversation.target_npc_id if conversation else None
+        return AttentionTier.FOCUSED if npc.npc_id == target else AttentionTier.AMBIENT
+
     def reset_session(self, session_id: str) -> None:
         return None
+
+
+class EventAwareRouter(RecordingRouter):
+    """Also promotes anything the backend marked event-relevant to Reactive.
+
+    A stand-in, not a model of Elson & Daniel's Router: it reads the enrichment the backend
+    supplies and applies the crudest possible rule, so a test can prove that relevance reached
+    the port without this file acquiring scoring, capacity, or hysteresis behaviour.
+    """
+
+    def tier_for(self, snapshot: RoutingSnapshot, npc: RoutingNpc) -> AttentionTier:
+        tier = super().tier_for(snapshot, npc)
+        if tier is AttentionTier.AMBIENT and npc.event_relevance > 0:
+            return AttentionTier.REACTIVE
+        return tier
 
 
 class RaisingRouter:

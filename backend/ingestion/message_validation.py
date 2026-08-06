@@ -16,8 +16,21 @@ from pydantic import BaseModel, ConfigDict, Field, StringConstraints, Validation
 SCHEMA_VERSION = "1.0"
 
 TOPIC_WORLD_SNAPSHOT = "world.snapshot"
+TOPIC_GAME_EVENT = "game.event"
 TOPIC_CONVERSATION_TURN = "conversation.turn"
 TOPIC_LEGACY_NPC_PROFILE = "npc.profile"
+
+# The team payload shows only `started`; specification #1 fixes the full lifecycle. The set is
+# closed because a status outside it has no defined revision rule — an event that could neither
+# progress nor terminate would stay active forever. Recorded for #2.
+EVENT_STATUS_STARTED = "started"
+EVENT_STATUS_UPDATED = "updated"
+EVENT_STATUS_ENDED = "ended"
+EVENT_STATUS_CANCELLED = "cancelled"
+TERMINAL_EVENT_STATUSES = frozenset({EVENT_STATUS_ENDED, EVENT_STATUS_CANCELLED})
+
+# Specification #1: revisions start at one.
+FIRST_EVENT_REVISION = 1
 
 # The only speaker the team payload shows. The value stays open (#2 owns the enum) but this is
 # the one that makes a turn a player utterance, and only a player utterance can trigger work.
@@ -125,6 +138,33 @@ class WorldSnapshot(CanonicalModel):
         return self
 
 
+class GameEvent(CanonicalModel):
+    """One complete-state revision of a durable lifecycle fact about the game world.
+
+    Delivery identity (`message_id`) prevents replay; `event_id` and `event_revision` track the
+    occurrence as it changes. The three role arrays may be empty and may overlap: the handoff
+    contract §12.4 expects one NPC to hold several roles at once.
+    """
+
+    schema_version: Literal["1.0"]
+    message_type: Literal["game_event"]
+    session_id: NonEmptyText
+    message_id: NonEmptyText
+    event_id: NonEmptyText
+    event_revision: Annotated[int, Field(ge=FIRST_EVENT_REVISION)]
+    timestamp_ms: Annotated[int, Field(ge=0)]
+    event_type: NonEmptyText
+    status: Literal["started", "updated", "ended", "cancelled"]
+    position: Vector3
+    actor_npc_ids: list[str]
+    target_npc_ids: list[str]
+    responder_npc_ids: list[str]
+
+    @property
+    def is_terminal(self) -> bool:
+        return self.status in TERMINAL_EVENT_STATUSES
+
+
 class ConversationTurn(CanonicalModel):
     """A durable utterance in a conversation, deduplicated by its turn identity."""
 
@@ -148,6 +188,11 @@ class ConversationTurn(CanonicalModel):
 def validate_world_snapshot(payload: object) -> WorldSnapshot:
     """Normalize a wire payload into a canonical world snapshot or reject it."""
     return _validate(WorldSnapshot, payload)
+
+
+def validate_game_event(payload: object) -> GameEvent:
+    """Normalize a wire payload into a canonical game-event revision or reject it."""
+    return _validate(GameEvent, payload)
 
 
 def validate_conversation_turn(payload: object) -> ConversationTurn:

@@ -32,6 +32,20 @@ SCHEMA = (
         ON conversation_turns (session_id, conversation_id, turn_index)
     """,
     """
+    CREATE TABLE IF NOT EXISTS game_events (
+        session_id TEXT NOT NULL,
+        event_id TEXT NOT NULL,
+        event_revision INTEGER NOT NULL,
+        message_id TEXT NOT NULL,
+        timestamp_ms INTEGER NOT NULL,
+        status TEXT NOT NULL,
+        payload TEXT NOT NULL,
+        witnesses TEXT NOT NULL,
+        PRIMARY KEY (session_id, event_id, event_revision),
+        UNIQUE (session_id, message_id)
+    )
+    """,
+    """
     CREATE TABLE IF NOT EXISTS generation_claims (
         claim_key TEXT PRIMARY KEY,
         claimed_at_ms INTEGER NOT NULL

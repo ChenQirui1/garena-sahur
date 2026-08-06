@@ -18,8 +18,8 @@ from typing import Literal, Protocol
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-SNAPSHOT_SCHEMA_VERSION = "1.0"
-SNAPSHOT_TYPE = "routing_snapshot"
+SNAPSHOT_SCHEMA_VERSION: Literal["1.0"] = "1.0"
+SNAPSHOT_TYPE: Literal["routing_snapshot"] = "routing_snapshot"
 RESULT_SCHEMA_VERSION = "1.0"
 RESULT_TYPE = "routing_result"
 
