@@ -11,6 +11,7 @@ HEADINGS = {
     "output_contract": "INSTRUCTIONS",
     "trigger": "THE PLAYER",
     "profile": "WHO YOU ARE",
+    "event": "WHAT IS HAPPENING",
     "world": "AROUND YOU",
     "history": "RECENT CONVERSATION",
 }

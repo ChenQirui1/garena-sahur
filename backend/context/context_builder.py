@@ -13,9 +13,14 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from backend.context.conversation_history import ConversationHistory
-from backend.context.event_context import describe_event
+from backend.context.event_context import ActiveEvents, describe_event
 from backend.context.npc_profiles import NpcProfile, NpcProfiles
-from backend.ingestion.message_validation import ConversationTurn, GameEvent, WorldSnapshot
+from backend.ingestion.message_validation import (
+    ConversationTurn,
+    GameEvent,
+    NpcObservation,
+    WorldSnapshot,
+)
 from backend.ingestion.turn_store import StoredTurn
 from backend.models.token_estimate import characters_for, estimate_tokens
 from backend.orchestration.router_port import AttentionTier
@@ -23,6 +28,7 @@ from backend.orchestration.router_port import AttentionTier
 OUTPUT_CONTRACT = "output_contract"
 TRIGGER = "trigger"
 PROFILE = "profile"
+EVENT = "event"
 WORLD = "world"
 HISTORY = "history"
 
@@ -63,12 +69,14 @@ class ContextBuilder:
         self,
         profiles: NpcProfiles,
         history: ConversationHistory,
+        events: ActiveEvents,
         focused: ContextLimits,
         reactive: ContextLimits,
         characters_per_token: int,
     ) -> None:
         self._profiles = profiles
         self._history = history
+        self._events = events
         self._limits = {AttentionTier.FOCUSED: focused, AttentionTier.REACTIVE: reactive}
         self._characters_per_token = characters_per_token
 
@@ -78,13 +86,19 @@ class ContextBuilder:
         limits = self._limits[tier]
         profile = self._profiles.profile_for(turn.target_npc_id)
         history = await self._history.before(turn, limits.history_turns)
+        # One lookup feeds both slots the snapshot answers, so an NPC it no longer observes is
+        # equally absent from each rather than described in one and not the other.
+        observed = _observed(snapshot, turn.target_npc_id)
 
         sections = self._fit(
             [
                 ContextSection(OUTPUT_CONTRACT, _output_contract(limits)),
                 ContextSection(TRIGGER, _trigger(turn.text)),
                 ContextSection(PROFILE, _persona(profile)),
-                ContextSection(WORLD, _world(snapshot, turn.target_npc_id)),
+                ContextSection(
+                    EVENT, await self._events.description_for(turn.session_id, observed)
+                ),
+                ContextSection(WORLD, _world(observed, snapshot.candidate_count)),
                 ContextSection(HISTORY, _history(history)),
             ],
             history,
@@ -121,7 +135,9 @@ class ContextBuilder:
                 ContextSection(OUTPUT_CONTRACT, _reaction_contract(limits)),
                 ContextSection(TRIGGER, trigger_text),
                 ContextSection(PROFILE, _persona(profile)),
-                ContextSection(WORLD, _world(snapshot, npc_id)),
+                ContextSection(
+                    WORLD, _world(_observed(snapshot, npc_id), snapshot.candidate_count)
+                ),
             ],
             (),
             limits,
@@ -212,15 +228,18 @@ def _persona(profile: NpcProfile) -> str:
     return "\n".join(lines)
 
 
-def _world(snapshot: WorldSnapshot, npc_id: str) -> str:
-    observed = next((npc for npc in snapshot.npcs if npc.npc_id == npc_id), None)
+def _observed(snapshot: WorldSnapshot, npc_id: str) -> NpcObservation | None:
+    return next((npc for npc in snapshot.npcs if npc.npc_id == npc_id), None)
+
+
+def _world(observed: NpcObservation | None, candidate_count: int) -> str:
     if observed is None:
         return ""
     return (
         f"The player is {observed.world_distance_blocks} blocks away, "
         f"{'in' if observed.inside_viewport else 'out of'} view, "
         f"{'with' if observed.line_of_sight else 'without'} a clear line of sight. "
-        f"{snapshot.candidate_count} villagers are nearby."
+        f"{candidate_count} villagers are nearby."
     )
 
 

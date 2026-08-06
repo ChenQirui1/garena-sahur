@@ -14,6 +14,7 @@ from fastapi import FastAPI
 from backend.config import Settings, load_settings
 from backend.context.context_builder import ContextBuilder, ContextLimits
 from backend.context.conversation_history import ConversationHistory
+from backend.context.event_context import ActiveEvents
 from backend.context.npc_profiles import NpcProfiles, ProfileDocumentError
 from backend.ingestion import http_intake
 from backend.ingestion.durable_store import DurableStore
@@ -140,6 +141,7 @@ def build_pipeline(settings: Settings, adapters: Adapters = Adapters()) -> Pipel
         context=ContextBuilder(
             profiles=profiles,
             history=ConversationHistory(turns),
+            events=ActiveEvents(events, radii),
             focused=ContextLimits(
                 input_tokens=settings.focused_input_token_limit,
                 output_tokens=settings.focused_output_token_limit,
