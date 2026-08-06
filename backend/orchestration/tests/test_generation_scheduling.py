@@ -17,6 +17,7 @@ import pytest_asyncio
 
 from backend.ingestion.tests.canonical_messages import (
     CONVERSATION_ID,
+    EVENT_ID,
     GUARD,
     SHOPKEEPER,
     THIEF,
@@ -37,6 +38,7 @@ from backend.orchestration.router_port import AttentionTier
 from backend.orchestration.tests.fake_routers import (
     EventAwareRouter,
     FlakyRouter,
+    StatefulRouter,
     TierScriptRouter,
 )
 from backend.orchestration.tests.harness import Harness, running, settings_for
@@ -124,6 +126,28 @@ async def test_an_upward_promotion_without_current_behaviour_generates_once(
 
         assert [call.npc_id for call in harness.telemetry.model_calls] == [SHOPKEEPER]
         assert len(harness.published_for(SHOPKEEPER)) == 1
+
+
+async def test_a_promotion_visible_only_on_the_trigger_path_still_generates(
+    tmp_path: Path,
+) -> None:
+    """The turn's own routing is the only place the thief's promotion is ever visible.
+
+    A persistent Router overwrites its previous-tier record on every call, so a transition the
+    trigger path routes past is not merely unobserved — the next snapshot reports it unchanged.
+    """
+    router = StatefulRouter({SHOPKEEPER: FOCUSED})
+    async for harness in running(settings_for(tmp_path), router=router):
+        await harness.snapshot(sequence=1, active_conversation=active_conversation())
+        await harness.event()
+        await harness.settle()
+        assert harness.published_for(THIEF) == []
+
+        router.tiers[THIEF] = REACTIVE
+        await harness.turn()
+        await harness.settle()
+
+        assert [command.event_id for command in harness.published_for(THIEF)] == [EVENT_ID]
 
 
 async def test_a_promotion_already_satisfied_by_unexpired_behaviour_never_calls_a_provider(
@@ -516,14 +540,13 @@ async def test_high_frequency_restatements_do_not_grow_the_generation_queue(
     assert harness.pending_generation_count() == 0
 
 
-async def test_work_that_went_stale_while_queued_never_reaches_a_provider(
+async def test_a_demotion_on_the_trigger_path_cancels_work_queued_behind_a_provider(
     tmp_path: Path,
 ) -> None:
-    """The check immediately before the call, not cancellation, is what stops this one.
+    """A turn routes on the spot, and its assignments run the same cancellation pass.
 
-    A turn routes on the spot rather than on the coalescing worker, so the assignments it
-    produces never run the cancellation pass. Work queued behind a busy provider can therefore
-    be demoted with nothing cancelling it, and only the revalidation before invocation is left.
+    They did not before #22: work queued behind a busy provider could be demoted by a turn's
+    own routing with nothing cancelling it, leaving only the revalidation before invocation.
     """
     router = TierScriptRouter({SHOPKEEPER: REACTIVE, THIEF: REACTIVE, GUARD: FOCUSED})
     async for harness in running(
@@ -551,7 +574,7 @@ async def test_work_that_went_stale_while_queued_never_reaches_a_provider(
         harness.provider.release_all()
         await harness.settle()
 
-    assert queued not in {one["npc_id"] for one in harness.observed(WORK_CANCELLED)}
+    assert [one["npc_id"] for one in harness.observed(WORK_CANCELLED)] == [queued]
     assert queued not in {call.npc_id for call in harness.telemetry.model_calls}
     assert harness.published_for(queued) == []
 

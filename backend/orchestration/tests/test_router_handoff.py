@@ -8,7 +8,11 @@ import pytest
 import pytest_asyncio
 from pydantic import ValidationError
 
-from backend.orchestration.router_handoff import RouterHandoff, RoutingStatus
+from backend.orchestration.router_handoff import (
+    RouterHandoff,
+    RoutingOutcome,
+    RoutingStatus,
+)
 from backend.orchestration.router_port import (
     SNAPSHOT_SCHEMA_VERSION,
     SNAPSHOT_TYPE,
@@ -23,6 +27,7 @@ from backend.orchestration.tests.fake_routers import (
     RaisingRouter,
     RecordingRouter,
     ScriptedRouter,
+    StatefulRouter,
     result_for,
 )
 
@@ -238,6 +243,117 @@ async def test_an_invalid_router_result_fails_closed_without_inventing_tiers(
     router = ScriptedRouter(make_result(snapshot))  # type: ignore[operator]
 
     assert await routed_by(router, snapshot) is RoutingStatus.INVALID_RESULT
+
+
+class Listener:
+    """Stands in for the coordinator's routing listener, which promotion and expiry hang off."""
+
+    def __init__(self) -> None:
+        self.outcomes: list[RoutingOutcome] = []
+
+    async def __call__(self, outcome: RoutingOutcome) -> None:
+        self.outcomes.append(outcome)
+
+
+async def test_a_trigger_routing_outcome_reaches_the_listener_like_any_other() -> None:
+    handoff = RouterHandoff(StatefulRouter({SHOPKEEPER: AttentionTier.FOCUSED}))
+    listener = Listener()
+    handoff.listen(listener)
+
+    outcome = await handoff.route_now(routing_snapshot(1842, target_npc_id=SHOPKEEPER))
+
+    assert outcome.status is RoutingStatus.ROUTED
+    assert listener.outcomes == [outcome]
+
+
+async def test_a_snapshot_superseded_during_enrichment_never_reaches_the_router() -> None:
+    """The trigger loses the race, so it reads the newer outcome instead of failing closed."""
+    router = StatefulRouter({SHOPKEEPER: AttentionTier.FOCUSED})
+    handoff = RouterHandoff(router)
+    await handoff.start()
+    try:
+        await route(handoff, routing_snapshot(8, target_npc_id=SHOPKEEPER))
+        outcome = await handoff.route_now(routing_snapshot(7, target_npc_id=SHOPKEEPER))
+    finally:
+        await handoff.stop()
+
+    assert [snapshot.sequence for snapshot in router.routed] == [8]
+    assert outcome.status is RoutingStatus.ROUTED
+    assert outcome.sequence == 8
+
+
+async def test_a_superseded_trigger_does_not_re_notify_the_listener() -> None:
+    """Nothing was routed, so there is no new outcome for promotion or expiry to read."""
+    handoff = RouterHandoff(StatefulRouter({SHOPKEEPER: AttentionTier.FOCUSED}))
+    listener = Listener()
+    handoff.listen(listener)
+    await handoff.start()
+    try:
+        await route(handoff, routing_snapshot(8, target_npc_id=SHOPKEEPER))
+        await handoff.route_now(routing_snapshot(7, target_npc_id=SHOPKEEPER))
+    finally:
+        await handoff.stop()
+
+    assert [outcome.sequence for outcome in listener.outcomes] == [8]
+
+
+async def test_a_newer_pending_snapshot_survives_a_trigger_routing() -> None:
+    """Routing a trigger discards only what it overtook, so nothing waiting goes unobserved."""
+    router = StatefulRouter({SHOPKEEPER: AttentionTier.FOCUSED})
+    handoff = RouterHandoff(router)
+    listener = Listener()
+    handoff.listen(listener)
+    await handoff.start()
+    try:
+        handoff.submit(routing_snapshot(9, target_npc_id=SHOPKEEPER))
+        await handoff.route_now(routing_snapshot(7, target_npc_id=SHOPKEEPER))
+        await handoff.wait_until_idle()
+    finally:
+        await handoff.stop()
+
+    assert [snapshot.sequence for snapshot in router.routed] == [7, 9]
+    assert [outcome.sequence for outcome in listener.outcomes] == [7, 9]
+
+
+async def test_a_pending_snapshot_the_trigger_overtook_is_never_routed() -> None:
+    """Routing it would hand the Router an older sequence and fail the session closed."""
+    router = StatefulRouter({SHOPKEEPER: AttentionTier.FOCUSED})
+    handoff = RouterHandoff(router)
+    await handoff.start()
+    try:
+        handoff.submit(routing_snapshot(5, target_npc_id=SHOPKEEPER))
+        await handoff.route_now(routing_snapshot(7, target_npc_id=SHOPKEEPER))
+        await handoff.wait_until_idle()
+    finally:
+        await handoff.stop()
+
+    assert [snapshot.sequence for snapshot in router.routed] == [7]
+    assert handoff.latest_outcome(SESSION_ID, WORLD_ID).status is RoutingStatus.ROUTED
+
+
+async def test_a_router_failure_on_the_trigger_path_still_fails_closed() -> None:
+    """Supersession is not the only reason a trigger produces nothing; a failure still shows."""
+    handoff = RouterHandoff(RaisingRouter(RuntimeError("router exploded")))
+
+    outcome = await handoff.route_now(routing_snapshot(1842, target_npc_id=SHOPKEEPER))
+
+    assert outcome.status is RoutingStatus.ROUTER_FAILED
+    assert outcome.assignments == ()
+    assert "router exploded" in outcome.failure_reason
+
+
+async def test_a_reset_session_lets_the_next_snapshot_route_from_scratch() -> None:
+    """Sequence memory is per session, so a restarted session is not permanently superseded."""
+    router = StatefulRouter({SHOPKEEPER: AttentionTier.FOCUSED})
+    handoff = RouterHandoff(router)
+
+    await handoff.route_now(routing_snapshot(8, target_npc_id=SHOPKEEPER))
+    handoff.reset_session(SESSION_ID)
+    outcome = await handoff.route_now(routing_snapshot(1, target_npc_id=SHOPKEEPER))
+
+    assert [snapshot.sequence for snapshot in router.routed] == [8, 1]
+    assert outcome.status is RoutingStatus.ROUTED
+    assert outcome.sequence == 1
 
 
 async def test_a_stopped_handoff_reports_that_it_is_not_running() -> None:

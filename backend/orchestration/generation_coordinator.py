@@ -343,8 +343,13 @@ class GenerationCoordinator:
     # ---- internals ----------------------------------------------------------------
 
     async def _route(self, session_id: str, snapshot: WorldSnapshot) -> RoutingOutcome:
-        """Route this world state now, because the decision below needs its tiers."""
-        return self.handoff.route_now(
+        """Route this world state now, because the decision below needs its tiers.
+
+        Enrichment awaits, so the outcome can answer a newer sequence than the one that went in.
+        That is the current routing for this session either way, which is what the decision
+        needs; losing the race is not a reason to suppress the trigger.
+        """
+        return await self.handoff.route_now(
             await self.routing_snapshots.build(
                 snapshot, self.conversation.projection(session_id)
             )

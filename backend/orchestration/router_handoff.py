@@ -50,6 +50,7 @@ class RouterHandoff:
         self._router = router
         self._pending: dict[tuple[str, str], RoutingSnapshot] = {}
         self._outcomes: dict[tuple[str, str], RoutingOutcome] = {}
+        self._routed_sequences: dict[tuple[str, str], int] = {}
         self._submitted = asyncio.Event()
         self._idle = asyncio.Event()
         self._idle.set()
@@ -65,10 +66,10 @@ class RouterHandoff:
         return self._idle.is_set()
 
     def listen(self, listener: Callable[[RoutingOutcome], Awaitable[None]]) -> None:
-        """Notify ``listener`` of every refreshed outcome, after the worker produced it.
+        """Notify ``listener`` of every outcome the Router produced, whichever path routed it.
 
-        Only the coalesced snapshot path notifies: `route_now` exists because its caller already
-        has a trigger in hand and acts on the outcome itself.
+        Promotion, expiry, and demotion-cancellation are decided here and nowhere else, so a
+        path that routed without notifying would consume the transition they read.
         """
         self._listener = listener
 
@@ -96,23 +97,34 @@ class RouterHandoff:
         self._idle.clear()
         self._submitted.set()
 
-    def route_now(self, snapshot: RoutingSnapshot) -> RoutingOutcome:
+    async def route_now(self, snapshot: RoutingSnapshot) -> RoutingOutcome:
         """Route immediately for work that cannot proceed without the assignment.
 
         Snapshot refresh is coalesced on the worker; a conversation turn is not, because the
-        turn's own generation decision needs this snapshot's tiers. Routing stays serialized:
-        the Router call itself never awaits, so this cannot interleave with the worker.
+        turn's own generation decision needs this snapshot's tiers. The caller enriches before
+        it gets here, and enrichment awaits, so by now the worker may already have routed a
+        newer sequence for this session and world. What is guaranteed is only that the Router
+        is never called concurrently and never called with a sequence behind one it has already
+        answered: a snapshot the worker overtook is not routed at all, and its caller reads the
+        newer outcome instead of failing closed.
 
-        The same world sequence can therefore be routed twice — once on snapshot arrival and
-        again when a turn changes the conversation projection. The handoff contract lists both
-        as reasons to call the Router, so the enrichment differs even though the sequence does
-        not. Whether a persistent Router treats the repeat as stale is a question for #3.
+        The same world sequence can still be routed twice — once on snapshot arrival and again
+        when a turn changes the conversation projection. The handoff contract lists both as
+        reasons to call the Router, so the enrichment differs even though the sequence does not.
+        Whether a persistent Router treats the repeat as stale is a question for #3.
         """
         key = (snapshot.session_id, snapshot.world_id)
-        self._pending.pop(key, None)
-        outcome = self._route(snapshot)
-        self._outcomes[key] = outcome
-        return outcome
+        outcome = await self._route_and_notify(key, snapshot)
+        if outcome is not None:
+            return outcome
+
+        superseding = self._outcomes[key]
+        logger.info(
+            "sequence %s was superseded by %s during enrichment",
+            snapshot.sequence,
+            superseding.sequence,
+        )
+        return superseding
 
     def latest_outcome(self, session_id: str, world_id: str) -> RoutingOutcome | None:
         return self._outcomes.get((session_id, world_id))
@@ -120,14 +132,17 @@ class RouterHandoff:
     def reset_session(self, session_id: str) -> None:
         """Drop everything routing remembers about one session, including the Router's own.
 
-        This is a direct call for the same reason `route_now` is: the Router call never awaits,
-        so it cannot interleave with the worker. Pending snapshots and outcomes go first, so a
-        snapshot queued before the reset cannot land on the freshly cleared state afterwards.
+        This is a direct call because the Router call itself never awaits, so it cannot land
+        mid-route. Pending snapshots, outcomes, and routed sequences go first, so a snapshot
+        queued before the reset cannot land on the freshly cleared state afterwards, and the
+        session's next snapshot is not refused for being behind a sequence nobody remembers.
         """
         for key in [key for key in self._pending if key[0] == session_id]:
             self._pending.pop(key, None)
         for key in [key for key in self._outcomes if key[0] == session_id]:
             self._outcomes.pop(key, None)
+        for key in [key for key in self._routed_sequences if key[0] == session_id]:
+            self._routed_sequences.pop(key, None)
         self._router.reset_session(session_id)
 
     async def wait_until_idle(self) -> None:
@@ -139,10 +154,34 @@ class RouterHandoff:
             self._submitted.clear()
             while self._pending:
                 key, snapshot = self._pending.popitem()
-                outcome = self._route(snapshot)
-                self._outcomes[key] = outcome
-                await self._notify(outcome)
+                await self._route_and_notify(key, snapshot)
             self._idle.set()
+
+    async def _route_and_notify(
+        self, key: tuple[str, str], snapshot: RoutingSnapshot
+    ) -> RoutingOutcome | None:
+        """Route one snapshot and tell the listener, or ``None`` if a newer one already won.
+
+        Both paths go through here so the listener cannot tell them apart, and so neither can
+        hand the Router a sequence behind one it has already answered — a persistent Router
+        rejects that, and the rejection would otherwise look like the Router being broken.
+        """
+        routed = self._routed_sequences.get(key)
+        if routed is not None and snapshot.sequence < routed:
+            return None
+
+        self._routed_sequences[key] = snapshot.sequence
+        outcome = self._route(snapshot)
+        self._outcomes[key] = outcome
+        self._discard_pending_through(key, snapshot.sequence)
+        await self._notify(outcome)
+        return outcome
+
+    def _discard_pending_through(self, key: tuple[str, str], sequence: int) -> None:
+        """Drop a waiting snapshot this routing overtook; it could no longer be routed."""
+        waiting = self._pending.get(key)
+        if waiting is not None and waiting.sequence <= sequence:
+            self._pending.pop(key, None)
 
     async def _notify(self, outcome: RoutingOutcome) -> None:
         """Tell the listener, but never let it take the routing worker down with it.
