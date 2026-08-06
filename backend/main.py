@@ -41,7 +41,7 @@ from backend.orchestration.generation_queue import GenerationQueue
 from backend.orchestration.generation_scheduler import GenerationScheduler
 from backend.orchestration.interaction_recency import InteractionRecency
 from backend.orchestration.observations import Observations
-from backend.orchestration.recovery import Recovered, Recovery
+from backend.orchestration.recovery import Recovery
 from backend.orchestration.router_handoff import RouterHandoff
 from backend.orchestration.router_port import AttentionTier, RouterPort
 from backend.orchestration.routing_snapshot import RoutingSnapshots

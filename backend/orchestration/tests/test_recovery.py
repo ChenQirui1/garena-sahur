@@ -9,10 +9,7 @@ one would have, and so a command's 15-second lifetime keeps running rather than 
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
-
-import pytest
 
 from backend.config import Settings
 from backend.ingestion.tests.canonical_messages import (

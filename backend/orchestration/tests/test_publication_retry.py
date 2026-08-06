@@ -17,8 +17,9 @@ import pytest
 import pytest_asyncio
 
 from backend.ingestion.tests.canonical_messages import (
-    SESSION_ID,
+    CONVERSATION_ID,
     SHOPKEEPER,
+    TURN_ID,
     active_conversation,
 )
 from backend.orchestration.command_store import EXPIRED, PENDING, PUBLISHED
@@ -131,9 +132,12 @@ async def test_every_attempt_sends_byte_identical_content(harness: Harness) -> N
     assert len(sent) == 3
     assert len(set(sent)) == 1, "a retry must reuse the identical serialized command"
 
+    # Identical bytes already imply identical fields; naming the ones the criterion lists
+    # means a future payload change cannot quietly drop one and still look byte-stable.
     payload = json.loads(sent[0])
     assert payload["command_id"] and payload["command_sequence"] == 1
     assert payload["source_sequence"] == 1842
+    assert (payload["turn_id"], payload["conversation_id"]) == (TURN_ID, CONVERSATION_ID)
     assert payload["expires_at_ms"] == payload["created_at_ms"] + COMMAND_LIFETIME_MS
 
 
