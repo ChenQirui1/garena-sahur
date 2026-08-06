@@ -412,20 +412,71 @@ async def test_work_within_one_tier_is_dispatched_first_in_first_out(
     assert tuple(request.npc_id for request in harness.provider.started) == arrival
 
 
-async def test_repeated_snapshots_do_not_grow_the_generation_queue(
-    conversation: Harness,
+async def test_high_frequency_restatements_do_not_grow_the_generation_queue(
+    tmp_path: Path,
 ) -> None:
-    await conversation.snapshot(sequence=1, active_conversation=active_conversation())
-    await conversation.settle()
+    """Twenty revisions of one event leave one pending item per NPC, not twenty."""
+    async for harness in running(
+        settings_for(tmp_path, focused_concurrency=1, reactive_concurrency=1, total_concurrency=1),
+        router=EventAwareRouter(),
+        gated=True,
+    ):
+        await harness.snapshot(sequence=1)
+        await harness.settle_routing()
 
-    for sequence in range(2, 40):
-        await conversation.snapshot(
-            sequence=sequence, active_conversation=active_conversation()
+        await harness.event(revision=1)
+        await harness.provider.started_after(1)
+
+        for revision in range(2, 22):
+            await harness.event(revision=revision, status="updated")
+            assert harness.pending_generation_count() <= 2
+
+        assert harness.pending_generation_count() <= 2
+
+        harness.provider.release_all()
+        await harness.settle()
+
+    assert harness.pending_generation_count() == 0
+
+
+async def test_work_that_went_stale_while_queued_never_reaches_a_provider(
+    tmp_path: Path,
+) -> None:
+    """The check immediately before the call, not cancellation, is what stops this one.
+
+    A turn routes on the spot rather than on the coalescing worker, so the assignments it
+    produces never run the cancellation pass. Work queued behind a busy provider can therefore
+    be demoted with nothing cancelling it, and only the revalidation before invocation is left.
+    """
+    router = TierScriptRouter({SHOPKEEPER: REACTIVE, THIEF: REACTIVE, GUARD: FOCUSED})
+    async for harness in running(
+        settings_for(tmp_path, focused_concurrency=1, reactive_concurrency=1, total_concurrency=1),
+        router=router,
+        gated=True,
+    ):
+        await harness.ingest(
+            "world.snapshot",
+            crowd_snapshot(
+                (SHOPKEEPER, THIEF, GUARD),
+                sequence=1,
+                active_conversation=active_conversation(GUARD),
+            ),
         )
+        await harness.settle_routing()
 
-    assert conversation.pending_generation_count() <= 2
-    await conversation.settle()
-    assert conversation.pending_generation_count() == 0
+        await harness.event(actor_npc_ids=[THIEF], target_npc_ids=[SHOPKEEPER])
+        await harness.provider.started_after(1)
+        queued = THIEF if harness.provider.started[0].npc_id == SHOPKEEPER else SHOPKEEPER
+
+        router.tiers[queued] = AMBIENT
+        await harness.turn(target_npc_id=GUARD, conversation_id=CONVERSATION_ID)
+
+        harness.provider.release_all()
+        await harness.settle()
+
+    assert queued not in {one["npc_id"] for one in harness.observed(WORK_CANCELLED)}
+    assert queued not in {call.npc_id for call in harness.telemetry.model_calls}
+    assert harness.published_for(queued) == []
 
 
 async def test_concurrent_deliveries_leave_one_claim_per_trigger_identity(
