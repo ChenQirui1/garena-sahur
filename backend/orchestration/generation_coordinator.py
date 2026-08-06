@@ -17,7 +17,11 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from backend.context.context_builder import ContextBuilder, GenerationContext
+from backend.context.context_builder import (
+    ContextBuilder,
+    GenerationContext,
+    TriggerKind,
+)
 from backend.ingestion.durable_store import StorageUnavailable
 from backend.ingestion.event_store import EventStore
 from backend.ingestion.message_validation import ConversationTurn, GameEvent, WorldSnapshot
@@ -33,8 +37,7 @@ from backend.models.model_gateway import (
     ProviderTimeout,
     error_code_for,
 )
-from backend.models.prompts.focused_prompt import render_focused_prompt
-from backend.models.prompts.reactive_prompt import render_reactive_prompt
+from backend.models.prompts.renderer_selection import renderer_for
 from backend.orchestration.behaviour_command import BehaviourCommand, identity_digest
 from backend.orchestration.behaviour_publisher import BehaviourPublisher
 from backend.orchestration.clock import Clock
@@ -444,22 +447,18 @@ class GenerationCoordinator:
         the same NPC off the same event revision differ only by the snapshot that promoted them,
         which appears in the claim key and nowhere else.
         """
-        render = (
-            render_focused_prompt
-            if work.tier is AttentionTier.FOCUSED
-            else render_reactive_prompt
-        )
         return GenerationRequest(
             request_id=f"request-{identity_digest(work.claim_key)}",
             session_id=work.session_id,
             npc_id=work.npc_id,
             npc_name=context.npc.name,
             tier=work.tier,
+            trigger_kind=context.trigger_kind,
             conversation_id=conversation_id,
             turn_id=turn_id,
             event_id=event_id,
             source_sequence=work.source_sequence,
-            prompt=render(context),
+            prompt=renderer_for(context)(context),
             trigger_text=context.trigger_text,
             estimated_input_tokens=context.estimated_input_tokens,
             output_token_limit=context.output_token_limit,
@@ -565,6 +564,10 @@ def _attempt_record(
     The prompt is deliberately absent: recovery never calls a provider, so the one thing it
     cannot use is the only large field. What it keeps is what chooses fallback content and what
     stamps the resulting command, and who the spent call was waiting on.
+
+    The trigger kind is kept even though nothing in recovery reads it, because the alternative
+    is assuming one on the way back and recording that an event reaction was something the
+    player said.
     """
     return {
         "provider": identity.provider if identity else None,
@@ -574,6 +577,7 @@ def _attempt_record(
         "npc_id": request.npc_id,
         "npc_name": request.npc_name,
         "tier": request.tier.value,
+        "trigger_kind": request.trigger_kind.value,
         "conversation_id": request.conversation_id,
         "turn_id": request.turn_id,
         "event_id": request.event_id,
@@ -599,6 +603,7 @@ def request_from_record(record: Mapping[str, Any]) -> GenerationRequest:
         npc_id=record["npc_id"],
         npc_name=record["npc_name"],
         tier=AttentionTier(record["tier"]),
+        trigger_kind=TriggerKind(record["trigger_kind"]),
         conversation_id=record["conversation_id"],
         turn_id=record["turn_id"],
         event_id=record["event_id"],

@@ -11,6 +11,7 @@ facts always yield the same context.
 from __future__ import annotations
 
 from dataclasses import dataclass
+from enum import StrEnum
 
 from backend.context.conversation_history import ConversationHistory
 from backend.context.event_context import ActiveEvents, describe_event
@@ -39,6 +40,18 @@ REQUIRED_SECTIONS = (OUTPUT_CONTRACT, TRIGGER)
 CLIPPED = " …"
 
 
+class TriggerKind(StrEnum):
+    """What the active-trigger section holds: player speech, or something the NPC observed.
+
+    This is not the generation trigger. That says *why* an NPC speaks, and promotion and expiry
+    reuse whichever context path still requires foreground behaviour — so only the builder
+    entry point that produced a context can say which of the two its trigger section is.
+    """
+
+    PLAYER_SPEECH = "player_speech"
+    OBSERVED_EVENT = "observed_event"
+
+
 @dataclass(frozen=True, slots=True)
 class ContextLimits:
     input_tokens: int
@@ -55,6 +68,7 @@ class ContextSection:
 @dataclass(frozen=True, slots=True)
 class GenerationContext:
     tier: AttentionTier
+    trigger_kind: TriggerKind
     npc: NpcProfile
     trigger_text: str
     sections: tuple[ContextSection, ...]
@@ -109,6 +123,7 @@ class ContextBuilder:
         )
         return GenerationContext(
             tier=tier,
+            trigger_kind=TriggerKind.PLAYER_SPEECH,
             npc=profile,
             trigger_text=turn.text,
             sections=sections,
@@ -147,6 +162,7 @@ class ContextBuilder:
         )
         return GenerationContext(
             tier=tier,
+            trigger_kind=TriggerKind.OBSERVED_EVENT,
             npc=profile,
             trigger_text=trigger_text,
             sections=sections,

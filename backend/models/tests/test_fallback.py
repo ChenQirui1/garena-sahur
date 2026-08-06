@@ -17,6 +17,7 @@ from typing import Mapping
 
 import pytest
 
+from backend.context.context_builder import TriggerKind
 from backend.models.fallback import (
     GENERIC_DIALOGUE,
     SOURCE_GENERIC,
@@ -69,6 +70,7 @@ def request_for(**overrides: object) -> GenerationRequest:
         "npc_id": "shopkeeper-uuid",
         "npc_name": "Mira",
         "tier": AttentionTier.FOCUSED,
+        "trigger_kind": TriggerKind.OBSERVED_EVENT,
         "conversation_id": None,
         "turn_id": None,
         "event_id": "market-theft-001",
