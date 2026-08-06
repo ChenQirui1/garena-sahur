@@ -85,8 +85,11 @@ class GenerationScheduler:
         self._worker = asyncio.create_task(self._dispatch_ready_work())
 
     async def stop(self) -> None:
-        for task in tuple(self._running):
+        """Stop dispatching and let work in flight finish unwinding before the store closes."""
+        running = tuple(self._running)
+        for task in running:
             task.cancel()
+        await asyncio.gather(*running, return_exceptions=True)
         if self._worker is None:
             return
         self._worker.cancel()

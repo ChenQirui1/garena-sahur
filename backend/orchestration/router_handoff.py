@@ -128,9 +128,23 @@ class RouterHandoff:
                 key, snapshot = self._pending.popitem()
                 outcome = self._route(snapshot)
                 self._outcomes[key] = outcome
-                if self._listener is not None:
-                    await self._listener(outcome)
+                await self._notify(outcome)
             self._idle.set()
+
+    async def _notify(self, outcome: RoutingOutcome) -> None:
+        """Tell the listener, but never let it take the routing worker down with it.
+
+        A worker that dies stops setting `is_idle`, so everything waiting on routing would wait
+        for ever and the service would never report ready again.
+        """
+        if self._listener is None:
+            return
+        try:
+            await self._listener(outcome)
+        except asyncio.CancelledError:
+            raise
+        except Exception:
+            logger.exception("routing listener failed for session %s", outcome.session_id)
 
     def _route(self, snapshot: RoutingSnapshot) -> RoutingOutcome:
         try:
