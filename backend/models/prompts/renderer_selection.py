@@ -12,7 +12,8 @@ from __future__ import annotations
 
 from typing import Callable
 
-from backend.context.context_builder import GenerationContext, TriggerKind
+from backend.context.context_builder import GenerationContext
+from backend.context.trigger_kind import TriggerKind
 from backend.models.prompts.focused_prompt import (
     render_focused_conversation_prompt,
     render_focused_reaction_prompt,

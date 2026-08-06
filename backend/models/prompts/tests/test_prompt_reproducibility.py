@@ -13,21 +13,15 @@ import pytest
 
 from backend.context.context_builder import GenerationContext
 from backend.models.prompts.renderer_selection import renderer_for
-from backend.models.prompts.tests.contexts import conversation_context, reaction_context
+from backend.models.prompts.tests.contexts import (
+    PATH_IDS,
+    conversation_context,
+    every_path,
+    reaction_context,
+)
 from backend.orchestration.router_port import AttentionTier
 
-EVERY_PATH = [
-    conversation_context(AttentionTier.FOCUSED),
-    reaction_context(AttentionTier.FOCUSED),
-    conversation_context(AttentionTier.REACTIVE),
-    reaction_context(AttentionTier.REACTIVE),
-]
-PATH_IDS = [
-    "focused player speech",
-    "focused observed event",
-    "reactive player speech",
-    "reactive observed event",
-]
+EVERY_PATH = every_path()
 
 
 @pytest.mark.parametrize("context", EVERY_PATH, ids=PATH_IDS)

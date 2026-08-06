@@ -11,11 +11,11 @@ facts always yield the same context.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from enum import StrEnum
 
 from backend.context.conversation_history import ConversationHistory
 from backend.context.event_context import ActiveEvents, describe_event
 from backend.context.npc_profiles import NpcProfile, NpcProfiles
+from backend.context.trigger_kind import TriggerKind
 from backend.ingestion.message_validation import (
     ConversationTurn,
     GameEvent,
@@ -38,18 +38,6 @@ HISTORY = "history"
 REQUIRED_SECTIONS = (OUTPUT_CONTRACT, TRIGGER)
 
 CLIPPED = " …"
-
-
-class TriggerKind(StrEnum):
-    """What the active-trigger section holds: player speech, or something the NPC observed.
-
-    This is not the generation trigger. That says *why* an NPC speaks, and promotion and expiry
-    reuse whichever context path still requires foreground behaviour — so only the builder
-    entry point that produced a context can say which of the two its trigger section is.
-    """
-
-    PLAYER_SPEECH = "player_speech"
-    OBSERVED_EVENT = "observed_event"
 
 
 @dataclass(frozen=True, slots=True)

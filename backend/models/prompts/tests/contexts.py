@@ -23,6 +23,9 @@ from backend.context.context_builder import (
 from backend.context.npc_profiles import NpcProfiles
 from backend.orchestration.router_port import AttentionTier
 
+# Ambient never reaches a provider, so it has no prompt and no place in these cases.
+PROVIDER_TIERS = (AttentionTier.FOCUSED, AttentionTier.REACTIVE)
+
 CONVERSATION_SECTIONS = (OUTPUT_CONTRACT, TRIGGER, PROFILE, EVENT, WORLD, HISTORY)
 REACTION_SECTIONS = (OUTPUT_CONTRACT, TRIGGER, PROFILE, WORLD)
 
@@ -36,6 +39,22 @@ def conversation_context(tier: AttentionTier) -> GenerationContext:
 
 def reaction_context(tier: AttentionTier) -> GenerationContext:
     return _context(tier, TriggerKind.OBSERVED_EVENT, REACTION_SECTIONS, OBSERVED_EVENT_TEXT)
+
+
+def every_path() -> list[GenerationContext]:
+    """One context per tier and trigger kind that can reach a provider."""
+    return [
+        build(tier)
+        for tier in PROVIDER_TIERS
+        for build in (conversation_context, reaction_context)
+    ]
+
+
+PATH_IDS = [
+    f"{tier.value} {kind}"
+    for tier in PROVIDER_TIERS
+    for kind in ("player speech", "observed event")
+]
 
 
 def _context(

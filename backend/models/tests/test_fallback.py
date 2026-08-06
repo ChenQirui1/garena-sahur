@@ -17,7 +17,7 @@ from typing import Mapping
 
 import pytest
 
-from backend.context.context_builder import TriggerKind
+from backend.context.trigger_kind import TriggerKind
 from backend.models.fallback import (
     GENERIC_DIALOGUE,
     SOURCE_GENERIC,

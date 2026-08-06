@@ -17,11 +17,8 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Any, Mapping
 
-from backend.context.context_builder import (
-    ContextBuilder,
-    GenerationContext,
-    TriggerKind,
-)
+from backend.context.context_builder import ContextBuilder, GenerationContext
+from backend.context.trigger_kind import TriggerKind
 from backend.ingestion.durable_store import StorageUnavailable
 from backend.ingestion.event_store import EventStore
 from backend.ingestion.message_validation import ConversationTurn, GameEvent, WorldSnapshot

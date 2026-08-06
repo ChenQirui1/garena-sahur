@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import pytest
 
-from backend.context.context_builder import TriggerKind
+from backend.context.trigger_kind import TriggerKind
 from backend.models.mock_provider import MODEL_FOR_TIER, PROVIDER, MockProvider
 from backend.models.model_gateway import (
     EmptyGeneration,

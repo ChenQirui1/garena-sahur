@@ -10,7 +10,7 @@ manufacture a command Minecraft cannot apply.
 
 from __future__ import annotations
 
-from backend.context.context_builder import TriggerKind
+from backend.context.trigger_kind import TriggerKind
 from backend.models.model_gateway import (
     GeneratedBehaviour,
     GenerationRequest,

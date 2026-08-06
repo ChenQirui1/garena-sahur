@@ -8,14 +8,19 @@ from __future__ import annotations
 
 import pytest
 
-from backend.context.context_builder import GenerationContext, TriggerKind
+from backend.context.context_builder import GenerationContext
+from backend.context.trigger_kind import TriggerKind
 from backend.models.prompts.focused_prompt import (
     render_focused_conversation_prompt,
     render_focused_reaction_prompt,
 )
 from backend.models.prompts.reactive_prompt import render_reactive_prompt
 from backend.models.prompts.renderer_selection import PromptRenderer, renderer_for
-from backend.models.prompts.tests.contexts import conversation_context, reaction_context
+from backend.models.prompts.tests.contexts import (
+    PATH_IDS,
+    conversation_context,
+    reaction_context,
+)
 from backend.orchestration.router_port import AttentionTier
 
 FOCUSED = AttentionTier.FOCUSED
@@ -30,12 +35,7 @@ REACTIVE = AttentionTier.REACTIVE
         (conversation_context(REACTIVE), render_reactive_prompt),
         (reaction_context(REACTIVE), render_reactive_prompt),
     ],
-    ids=[
-        "focused player speech",
-        "focused observed event",
-        "reactive player speech",
-        "reactive observed event",
-    ],
+    ids=PATH_IDS,
 )
 def test_the_renderer_is_chosen_by_tier_and_trigger_kind_together(
     context: GenerationContext, expected: PromptRenderer

@@ -39,15 +39,15 @@ REACTION_HEADINGS = {**SHARED_HEADINGS, TRIGGER: SITUATION_HEADING}
 
 def render_focused_conversation_prompt(context: GenerationContext) -> str:
     """The trigger is what the player said, so it is signposted as the player."""
-    return _headed(context, CONVERSATION_HEADINGS)
+    return _render_with_headings(context, CONVERSATION_HEADINGS)
 
 
 def render_focused_reaction_prompt(context: GenerationContext) -> str:
     """The trigger is what the NPC observed, so it is signposted as the situation."""
-    return _headed(context, REACTION_HEADINGS)
+    return _render_with_headings(context, REACTION_HEADINGS)
 
 
-def _headed(context: GenerationContext, headings: dict[str, str]) -> str:
+def _render_with_headings(context: GenerationContext, headings: dict[str, str]) -> str:
     """Headed sections, because Focused context is rich enough to need signposting."""
     return "\n\n".join(
         f"{headings[section.name]}\n{section.body}" for section in context.sections

@@ -16,7 +16,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from typing import Mapping, Protocol
 
-from backend.context.context_builder import TriggerKind
+from backend.context.trigger_kind import TriggerKind
 from backend.orchestration.clock import DeadlineExceeded, Deadlines
 from backend.orchestration.router_port import AttentionTier
 
@@ -28,8 +28,6 @@ class GenerationRequest:
     npc_id: str
     npc_name: str
     tier: AttentionTier
-    # What the trigger text is — player speech or an observed event. Not why generation
-    # happened: `trigger` below says that, and promotion and expiry can be either.
     trigger_kind: TriggerKind
     conversation_id: str | None
     turn_id: str | None
