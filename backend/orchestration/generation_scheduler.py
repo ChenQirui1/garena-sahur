@@ -46,7 +46,7 @@ class Executor(Protocol):
 
     def abandon(self, work: Generation, reason: str) -> None: ...
 
-    def note_turn_not_generated(self, session_id: str) -> None: ...
+    async def note_turn_not_generated(self, session_id: str) -> None: ...
 
 
 class GenerationScheduler:
@@ -86,25 +86,30 @@ class GenerationScheduler:
         self._worker = asyncio.create_task(self._dispatch_ready_work())
 
     async def stop(self) -> None:
-        """Stop dispatching and let work in flight finish unwinding before the store closes."""
+        """Stop dispatching and let work in flight finish unwinding before the store closes.
+
+        The dispatcher goes first. Cancelling the running tasks first leaves the worker free to
+        start replacements while they unwind, and those replacements then run on into a closed
+        database.
+        """
+        if self._worker is not None:
+            self._worker.cancel()
+            try:
+                await self._worker
+            except asyncio.CancelledError:
+                pass
+            self._worker = None
+
         running = tuple(self._running)
         for task in running:
             task.cancel()
         await asyncio.gather(*running, return_exceptions=True)
-        if self._worker is None:
-            return
-        self._worker.cancel()
-        try:
-            await self._worker
-        except asyncio.CancelledError:
-            pass
-        self._worker = None
 
     async def drain(self) -> None:
         """Wait until nothing is queued and nothing is in flight."""
         await self._idle.wait()
 
-    def submit(self, work: Generation) -> None:
+    async def submit(self, work: Generation) -> None:
         """Offer one piece of work, and report whatever it displaced."""
         accepted = self._queue.enqueue(work)
         if accepted.superseded is not None:
@@ -115,7 +120,9 @@ class GenerationScheduler:
                 trigger=accepted.superseded.trigger.value,
                 superseded_by=work.trigger.value,
             )
-            self._abandon(accepted.superseded, f"superseded by {work.trigger.value} work")
+            await self._abandon(
+                accepted.superseded, f"superseded by {work.trigger.value} work"
+            )
 
         if not accepted.queued:
             self._observations.note(
@@ -130,7 +137,7 @@ class GenerationScheduler:
         self._idle.clear()
         self._runnable.set()
 
-    def cancel(self, matches: Callable[[Generation], bool], reason: str) -> None:
+    async def cancel(self, matches: Callable[[Generation], bool], reason: str) -> None:
         """Drop queued work that a later delivery has already invalidated."""
         for work in self._queue.cancel(matches):
             self._observations.note(
@@ -140,7 +147,7 @@ class GenerationScheduler:
                 trigger=work.trigger.value,
                 reason=reason,
             )
-            self._abandon(work, reason)
+            await self._abandon(work, reason)
         self._settle()
 
     async def _dispatch_ready_work(self) -> None:
@@ -183,26 +190,26 @@ class GenerationScheduler:
 
         stale = await executor.is_current(work)
         if stale is not None:
-            self._abandon(work, stale)
+            await self._abandon(work, stale)
             return
 
         if not await self._claims.claim(work.claim_key, self._clock.now_ms()):
-            self._abandon(work, "generation was already claimed")
+            await self._abandon(work, "generation was already claimed")
             return
 
         command = await executor.generate(work)
         if command is None:
-            self._abandon(work, "the provider produced nothing usable")
+            await self._abandon(work, "the provider produced nothing usable")
             return
 
         stale = await executor.is_current(work)
         if stale is not None:
-            self._abandon(work, f"late provider output discarded: {stale}")
+            await self._abandon(work, f"late provider output discarded: {stale}")
             return
 
         await executor.publish(work, command)
 
-    def _abandon(self, work: Generation, reason: str) -> None:
+    async def _abandon(self, work: Generation, reason: str) -> None:
         """Record why this work produced nothing, and release the conversation if it held it.
 
         A turn that was superseded by a newer turn must not release the conversation, because
@@ -215,7 +222,7 @@ class GenerationScheduler:
         if work.trigger is Trigger.TURN and not self._queue.holds_trigger(
             work.session_id, Trigger.TURN, excluding=work
         ):
-            executor.note_turn_not_generated(work.session_id)
+            await executor.note_turn_not_generated(work.session_id)
 
     def _settle(self) -> None:
         if self._queue.is_idle and not self._running:

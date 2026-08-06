@@ -35,3 +35,13 @@ class WorldStateStore:
         arrival order is the only ordering that holds when a session spans more than one.
         """
         return self._applied_by_session.get(session_id)
+
+    def forget(self, session_id: str) -> None:
+        """Drop one session's retained state, so a cleaned session starts from nothing.
+
+        Without this a cleaned session would keep its last sequence and reject the snapshot
+        that restarts it as stale.
+        """
+        self._applied_by_session.pop(session_id, None)
+        for key in [key for key in self._latest if key[0] == session_id]:
+            self._latest.pop(key, None)

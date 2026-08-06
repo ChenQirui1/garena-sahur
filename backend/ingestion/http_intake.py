@@ -74,6 +74,20 @@ async def latest_routing(
     return _as_routing_body(outcome)
 
 
+@router.delete("/sessions/{session_id}")
+async def clean_session(
+    session_id: str,
+    pipeline: Annotated["Pipeline", Depends(_pipeline)],
+) -> dict[str, Any]:
+    """Erase one session's retained state. Nothing else in the backend deletes it."""
+    cleaned = await pipeline.cleanup.clean(session_id)
+    return {
+        "session_id": cleaned.session_id,
+        "rows_removed": cleaned.total_rows,
+        "rows_by_table": cleaned.rows_by_table,
+    }
+
+
 @router.get("/health/live")
 async def liveness() -> dict[str, str]:
     return {"status": "alive"}

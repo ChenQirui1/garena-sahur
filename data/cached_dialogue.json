@@ -1,4 +1,49 @@
 {
-  "_comment": "Scripted and fallback dialogue.",
-  "_owner": "Jerome & Richard"
+  "_comment": "Scripted and fallback dialogue, resolved most-specific first: npc+trigger, then role+event, then tier, then generic. Loaded by backend/models/fallback.py. No action verbs: the executable action vocabulary is Ivan's under coordination issue #4.",
+  "_owner": "Jerome & Richard",
+  "version": 1,
+  "by_npc_and_trigger": [
+    {
+      "npc_id": "shopkeeper-uuid",
+      "trigger": "turn",
+      "dialogue": "Give me a moment, love — my head's all over the place today."
+    },
+    {
+      "npc_id": "guard-uuid",
+      "trigger": "turn",
+      "dialogue": "Hold there. I'll have an answer for you shortly."
+    }
+  ],
+  "by_role_and_event": [
+    {
+      "role": "actor",
+      "event_type": "theft",
+      "dialogue": "Nothing to see. Move along."
+    },
+    {
+      "role": "target",
+      "event_type": "theft",
+      "dialogue": "My bread! Someone stop him!"
+    },
+    {
+      "role": "responder",
+      "event_type": "theft",
+      "dialogue": "Out of the way — I'm going after him."
+    },
+    {
+      "role": "witness",
+      "event_type": "theft",
+      "dialogue": "Did you see that? Broad daylight, in the market."
+    },
+    {
+      "role": "nearby",
+      "event_type": "theft",
+      "dialogue": "What's all that shouting about?"
+    }
+  ],
+  "by_tier": {
+    "focused": "Sorry — say that again? The market's got my head spinning.",
+    "reactive": "Hm."
+  },
+  "generic": "..."
 }

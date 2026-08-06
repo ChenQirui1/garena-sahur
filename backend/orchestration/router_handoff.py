@@ -117,6 +117,19 @@ class RouterHandoff:
     def latest_outcome(self, session_id: str, world_id: str) -> RoutingOutcome | None:
         return self._outcomes.get((session_id, world_id))
 
+    def reset_session(self, session_id: str) -> None:
+        """Drop everything routing remembers about one session, including the Router's own.
+
+        This is a direct call for the same reason `route_now` is: the Router call never awaits,
+        so it cannot interleave with the worker. Pending snapshots and outcomes go first, so a
+        snapshot queued before the reset cannot land on the freshly cleared state afterwards.
+        """
+        for key in [key for key in self._pending if key[0] == session_id]:
+            self._pending.pop(key, None)
+        for key in [key for key in self._outcomes if key[0] == session_id]:
+            self._outcomes.pop(key, None)
+        self._router.reset_session(session_id)
+
     async def wait_until_idle(self) -> None:
         await self._idle.wait()
 

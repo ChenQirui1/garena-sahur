@@ -10,10 +10,16 @@ from backend.models.model_gateway import (
     GeneratedBehaviour,
     GenerationRequest,
     ModelGateway,
+    ProviderIdentity,
 )
+from backend.orchestration.clock import AsyncioDeadlines
 from backend.orchestration.router_port import AttentionTier
 
 CHARACTERS_PER_TOKEN = 4
+
+# Long enough that a deterministic mock never approaches them; the tier budgets themselves are
+# asserted through the running service, where a manual deadline can actually expire.
+GENEROUS_TIMEOUTS_MS = {AttentionTier.FOCUSED: 4_000, AttentionTier.REACTIVE: 2_000}
 
 
 def request_for(tier: AttentionTier, **overrides: object) -> GenerationRequest:
@@ -36,6 +42,9 @@ def request_for(tier: AttentionTier, **overrides: object) -> GenerationRequest:
 
 
 class SilentProvider:
+    def identity(self, tier: AttentionTier) -> ProviderIdentity:
+        return ProviderIdentity(provider="silent", model="silent")
+
     async def generate(self, request: GenerationRequest) -> GeneratedBehaviour:
         return GeneratedBehaviour(
             dialogue="   ",
@@ -50,7 +59,12 @@ class SilentProvider:
 
 def gateway() -> ModelGateway:
     provider = MockProvider(CHARACTERS_PER_TOKEN)
-    return ModelGateway(focused=provider, reactive=provider)
+    return ModelGateway(
+        focused=provider,
+        reactive=provider,
+        deadlines=AsyncioDeadlines(),
+        timeouts_ms=GENEROUS_TIMEOUTS_MS,
+    )
 
 
 @pytest.mark.parametrize("tier", [AttentionTier.FOCUSED, AttentionTier.REACTIVE])
@@ -102,6 +116,11 @@ async def test_a_result_with_neither_dialogue_nor_action_is_refused() -> None:
     silent = SilentProvider()
 
     with pytest.raises(EmptyGeneration):
-        await ModelGateway(focused=silent, reactive=silent).generate(
+        await ModelGateway(
+            focused=silent,
+            reactive=silent,
+            deadlines=AsyncioDeadlines(),
+            timeouts_ms=GENEROUS_TIMEOUTS_MS,
+        ).generate(
             request_for(AttentionTier.FOCUSED)
         )

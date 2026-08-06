@@ -10,7 +10,11 @@ manufacture a command Minecraft cannot apply.
 
 from __future__ import annotations
 
-from backend.models.model_gateway import GeneratedBehaviour, GenerationRequest
+from backend.models.model_gateway import (
+    GeneratedBehaviour,
+    GenerationRequest,
+    ProviderIdentity,
+)
 from backend.models.token_estimate import characters_for, estimate_tokens
 from backend.orchestration.router_port import AttentionTier
 
@@ -24,6 +28,9 @@ MODEL_FOR_TIER = {
 class MockProvider:
     def __init__(self, characters_per_token: int) -> None:
         self._characters_per_token = characters_per_token
+
+    def identity(self, tier: AttentionTier) -> ProviderIdentity:
+        return ProviderIdentity(provider=PROVIDER, model=MODEL_FOR_TIER[tier])
 
     async def generate(self, request: GenerationRequest) -> GeneratedBehaviour:
         dialogue = _clipped(_dialogue(request), request, self._characters_per_token)
