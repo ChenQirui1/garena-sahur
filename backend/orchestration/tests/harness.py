@@ -31,9 +31,24 @@ from backend.orchestration.tests.fake_routers import RecordingRouter
 from backend.orchestration.tests.fakes import (
     GatedProvider,
     ManualClock,
+    ManualDeadlines,
     RecordingPublisher,
     RecordingTelemetry,
 )
+
+CACHED_DIALOGUE_DOCUMENT = """
+{
+  "version": 1,
+  "by_npc_and_trigger": [
+    {"npc_id": "shopkeeper-uuid", "trigger": "turn", "dialogue": "Cached for Mira's turn."}
+  ],
+  "by_role_and_event": [
+    {"role": "actor", "event_type": "market_theft", "dialogue": "Cached for the thief."}
+  ],
+  "by_tier": {"focused": "Scripted focused line.", "reactive": "Scripted reactive line."},
+  "generic": "Generic safe line."
+}
+"""
 
 # Routing can queue generation and generation can re-route, so settling alternates between the
 # two until neither has anything left rather than draining each once.
@@ -80,6 +95,7 @@ class Harness:
         publisher: RecordingPublisher,
         telemetry: RecordingTelemetry,
         clock: ManualClock,
+        deadlines: ManualDeadlines,
         router: RouterPort,
         provider: GatedProvider,
     ) -> None:
@@ -88,6 +104,7 @@ class Harness:
         self.publisher = publisher
         self.telemetry = telemetry
         self.clock = clock
+        self.deadlines = deadlines
         self.router = router
         self.provider = provider
 
@@ -147,21 +164,40 @@ class Harness:
         return [command for command in self.publisher.published if command.npc_id == npc_id]
 
 
-def settings_for(tmp_path: Path, profiles: str = PROFILE_DOCUMENT, **overrides: Any) -> Settings:
+def settings_for(
+    tmp_path: Path,
+    profiles: str = PROFILE_DOCUMENT,
+    cached_dialogue: str = CACHED_DIALOGUE_DOCUMENT,
+    **overrides: Any,
+) -> Settings:
     profile_path = tmp_path / "npc_profiles.json"
     profile_path.write_text(profiles)
+    dialogue_path = tmp_path / "cached_dialogue.json"
+    dialogue_path.write_text(cached_dialogue)
     return Settings(
         database_path=tmp_path / "state" / "spotlight.sqlite3",
         npc_profiles_path=profile_path,
+        cached_dialogue_path=dialogue_path,
         **overrides,
     )
 
 
 async def running(
-    settings: Settings, router: RouterPort | None = None, gated: bool = False
+    settings: Settings,
+    router: RouterPort | None = None,
+    gated: bool = False,
+    publisher: RecordingPublisher | None = None,
+    clock: ManualClock | None = None,
 ) -> AsyncIterator[Harness]:
-    clock = ManualClock()
-    publisher = RecordingPublisher()
+    """Start the service. Passing a publisher or clock in is how a restart reuses them.
+
+    A recovery test needs the second process to publish into the same recorder as the first,
+    and to carry the same wall-clock reading, or a command's 15-second lifetime would look
+    fresh again simply because a new `ManualClock` started at the same instant.
+    """
+    clock = clock or ManualClock()
+    deadlines = ManualDeadlines(clock)
+    publisher = publisher or RecordingPublisher()
     telemetry = RecordingTelemetry()
     router = router or RecordingRouter()
     provider = GatedProvider(MockProvider(settings.characters_per_token), gated=gated)
@@ -172,6 +208,7 @@ async def running(
             publisher=publisher,
             telemetry=telemetry,
             clock=clock,
+            deadlines=deadlines,
             provider=provider,
         ),
     )
@@ -180,4 +217,6 @@ async def running(
     async with LifespanManager(app):
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://backend") as client:
-            yield Harness(client, pipeline, publisher, telemetry, clock, router, provider)
+            yield Harness(
+                client, pipeline, publisher, telemetry, clock, deadlines, router, provider
+            )

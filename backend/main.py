@@ -21,6 +21,7 @@ from backend.ingestion.event_store import EventStore
 from backend.ingestion.intake_service import IntakeService
 from backend.ingestion.turn_store import TurnStore
 from backend.ingestion.world_state_store import WorldStateStore
+from backend.models.fallback import FallbackDocumentError, FallbackLibrary
 from backend.models.mock_provider import MockProvider
 from backend.models.model_gateway import ModelGateway, Provider
 from backend.orchestration.behaviour_publisher import (
@@ -28,10 +29,11 @@ from backend.orchestration.behaviour_publisher import (
     LoggingPublisher,
     PublisherPort,
 )
-from backend.orchestration.clock import Clock, SystemClock
+from backend.orchestration.clock import AsyncioDeadlines, Clock, Deadlines, SystemClock
 from backend.orchestration.command_store import CommandStore
 from backend.orchestration.conversation_manager import ConversationManager
-from backend.orchestration.deduplication import GenerationClaims
+from backend.orchestration.conversation_store import ConversationStore
+from backend.orchestration.deduplication import GenerationClaims, ProviderAttempts
 from backend.orchestration.development_router import AmbientOnlyRouter
 from backend.orchestration.event_relevance import EventRadii
 from backend.orchestration.generation_coordinator import GenerationCoordinator
@@ -39,9 +41,11 @@ from backend.orchestration.generation_queue import GenerationQueue
 from backend.orchestration.generation_scheduler import GenerationScheduler
 from backend.orchestration.interaction_recency import InteractionRecency
 from backend.orchestration.observations import Observations
+from backend.orchestration.recovery import Recovered, Recovery
 from backend.orchestration.router_handoff import RouterHandoff
-from backend.orchestration.router_port import RouterPort
+from backend.orchestration.router_port import AttentionTier, RouterPort
 from backend.orchestration.routing_snapshot import RoutingSnapshots
+from backend.orchestration.session_cleanup import SessionCleanup
 from backend.orchestration.telemetry_port import LoggingTelemetry, TelemetryPort
 
 
@@ -53,6 +57,7 @@ class Adapters:
     publisher: PublisherPort | None = None
     telemetry: TelemetryPort | None = None
     clock: Clock | None = None
+    deadlines: Deadlines | None = None
     provider: Provider | None = None
 
 
@@ -66,6 +71,8 @@ class Pipeline:
     commands: CommandStore
     handoff: RouterHandoff
     store: DurableStore
+    recovery: Recovery
+    cleanup: SessionCleanup
     observations: Observations
     readiness_error: str | None
 
@@ -81,17 +88,30 @@ class Pipeline:
 
 def build_pipeline(settings: Settings, adapters: Adapters = Adapters()) -> Pipeline:
     """Wire one persistent Router and one durable store into one service lifecycle."""
-    profiles, readiness_error = _load_profiles(settings)
+    profiles, profile_error = _load_profiles(settings)
+    fallback, fallback_error = _load_fallback(settings)
+    readiness_error = profile_error or fallback_error
     clock = adapters.clock or SystemClock()
+    deadlines = adapters.deadlines or AsyncioDeadlines()
     store = DurableStore(settings.database_path)
     turns = TurnStore(store)
     events = EventStore(store)
     commands = CommandStore(store)
+    attempts = ProviderAttempts(store)
     world_state = WorldStateStore()
-    conversation = ConversationManager()
-    handoff = RouterHandoff(adapters.router or AmbientOnlyRouter())
     observations = Observations()
+    conversation = ConversationManager(ConversationStore(store, observations))
+    handoff = RouterHandoff(adapters.router or AmbientOnlyRouter())
     provider = adapters.provider or MockProvider(settings.characters_per_token)
+    telemetry = adapters.telemetry or LoggingTelemetry()
+    publisher = BehaviourPublisher(
+        commands=commands,
+        publisher=adapters.publisher or LoggingPublisher(),
+        deadlines=deadlines,
+        clock=clock,
+        observations=observations,
+        retry_delays_ms=settings.publication_retry_delays_ms,
+    )
     scheduler = GenerationScheduler(
         queue=GenerationQueue(
             focused_limit=settings.focused_concurrency,
@@ -132,14 +152,25 @@ def build_pipeline(settings: Settings, adapters: Adapters = Adapters()) -> Pipel
             ),
             characters_per_token=settings.characters_per_token,
         ),
-        gateway=ModelGateway(focused=provider, reactive=provider),
+        gateway=ModelGateway(
+            focused=provider,
+            reactive=provider,
+            deadlines=deadlines,
+            timeouts_ms={
+                AttentionTier.FOCUSED: settings.focused_timeout_ms,
+                AttentionTier.REACTIVE: settings.reactive_timeout_ms,
+            },
+        ),
+        fallback=fallback,
+        attempts=attempts,
         commands=commands,
-        publisher=BehaviourPublisher(commands, adapters.publisher or LoggingPublisher()),
-        telemetry=adapters.telemetry or LoggingTelemetry(),
+        publisher=publisher,
+        telemetry=telemetry,
         observations=observations,
         clock=clock,
         radii=radii,
         command_lifetime_ms=settings.command_lifetime_ms,
+        characters_per_token=settings.characters_per_token,
     )
     scheduler.bind(generation)
     handoff.listen(generation.on_routing_outcome)
@@ -163,6 +194,23 @@ def build_pipeline(settings: Settings, adapters: Adapters = Adapters()) -> Pipel
         commands=commands,
         handoff=handoff,
         store=store,
+        recovery=Recovery(
+            attempts=attempts,
+            commands=commands,
+            conversation=conversation,
+            generation=generation,
+            publisher=publisher,
+            telemetry=telemetry,
+            observations=observations,
+            clock=clock,
+        ),
+        cleanup=SessionCleanup(
+            store=store,
+            world_state=world_state,
+            conversation=conversation,
+            handoff=handoff,
+            observations=observations,
+        ),
         observations=observations,
         readiness_error=readiness_error,
     )
@@ -177,6 +225,9 @@ def create_app(settings: Settings | None = None, adapters: Adapters = Adapters()
         await pipeline.store.open()
         await pipeline.handoff.start()
         await pipeline.scheduler.start()
+        # Recovery runs after the scheduler so a republished command has somewhere to go, and
+        # before intake opens so a redelivered turn cannot race the work it is recovering.
+        await pipeline.recovery.run()
         try:
             yield
         finally:
@@ -197,3 +248,15 @@ def _load_profiles(settings: Settings) -> tuple[NpcProfiles, str | None]:
         return NpcProfiles.load(settings.npc_profiles_path), None
     except ProfileDocumentError as unusable:
         return NpcProfiles.empty(), str(unusable)
+
+
+def _load_fallback(settings: Settings) -> tuple[FallbackLibrary, str | None]:
+    """Same rule as profiles, and the empty library still answers every request.
+
+    Unreadable cached dialogue must not leave a spent provider attempt with nothing to publish,
+    so the service reports itself unready while still being able to speak generically.
+    """
+    try:
+        return FallbackLibrary.load(settings.cached_dialogue_path), None
+    except FallbackDocumentError as unusable:
+        return FallbackLibrary.empty(), str(unusable)

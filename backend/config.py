@@ -34,9 +34,20 @@ class Settings(BaseSettings):
 
     database_path: Path = Field(default_factory=default_database_path)
     npc_profiles_path: Path = Path("data/npc_profiles.json")
+    cached_dialogue_path: Path = Path("data/cached_dialogue.json")
 
     # Specification #1: a command is acceptable for 15 seconds from its creation.
     command_lifetime_ms: int = Field(default=15_000, gt=0)
+
+    # Specification #1: Focused calls time out after four seconds and Reactive after two. The
+    # provider never sees a retry, here or in its own SDK, so this budget is the whole allowance
+    # for one attempt rather than the allowance for a first try.
+    focused_timeout_ms: int = Field(default=4_000, gt=0)
+    reactive_timeout_ms: int = Field(default=2_000, gt=0)
+
+    # Specification #1: publication retries occur after approximately 100 ms, 250 ms, 500 ms and
+    # 1 second, and may repeat that cadence while the same command is still within its lifetime.
+    publication_retry_delays_ms: tuple[int, ...] = (100, 250, 500, 1_000)
 
     # Specification #1: provider concurrency is capped at two Focused and six Reactive calls,
     # with eight in total. These bound outbound model calls and are a different quantity from

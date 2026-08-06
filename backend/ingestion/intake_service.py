@@ -175,7 +175,7 @@ class IntakeService:
             )
 
         self._recency.note_interaction(turn.session_id, turn.target_npc_id)
-        await self._act_on(self.conversation.admit_turn(turn))
+        await self._act_on(await self.conversation.admit_turn(turn))
         return IntakeResult(IntakeOutcome.APPLIED)
 
     async def _refresh_routing(self, snapshot: WorldSnapshot) -> None:
@@ -184,7 +184,7 @@ class IntakeService:
         Promotion and expiry are noticed when the refreshed result comes back, on the routing
         worker, so a burst of snapshots is coalesced before any of them is looked at.
         """
-        admission = self.conversation.observe_snapshot(snapshot)
+        admission = await self.conversation.observe_snapshot(snapshot)
         if snapshot.active_conversation is not None:
             # An open conversation is a live interaction, so its target keeps its recency
             # fresh and only starts decaying once the conversation is gone.

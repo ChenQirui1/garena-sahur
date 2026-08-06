@@ -10,11 +10,14 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
-from typing import Callable
+from contextlib import asynccontextmanager
+from dataclasses import dataclass
+from typing import AsyncIterator, Callable
 
 from backend.models.model_gateway import GeneratedBehaviour, GenerationRequest, Provider
 from backend.orchestration.behaviour_command import BehaviourCommand
-from backend.orchestration.command_store import CommandStore
+from backend.orchestration.clock import DeadlineExceeded
+from backend.orchestration.command_store import CommandStore, StoredCommand
 from backend.orchestration.router_port import AttentionTier
 from backend.orchestration.telemetry_port import ModelCallFact
 
@@ -51,22 +54,108 @@ class ManualClock:
         self._now_ms += milliseconds
 
 
+@dataclass(slots=True)
+class _Pending:
+    """One open deadline: whose work it bounds, and the budget it was opened with."""
+
+    task: asyncio.Task[object]
+    milliseconds: int
+    expired: bool = False
+
+
+class ManualDeadlines:
+    """Waiting that only happens when a test says so.
+
+    `limit` expires the way `asyncio.timeout` does — by cancelling the task and converting the
+    cancellation — so production code cannot tell this apart from a real elapsed budget. `sleep`
+    returns at once and moves the manual clock instead, which is what lets a retry cadence be
+    asserted as a list of requested delays rather than watched in real time.
+    """
+
+    def __init__(self, clock: "ManualClock | None" = None) -> None:
+        self.slept_ms: list[int] = []
+        self._clock = clock
+        self._open: list[_Pending] = []
+
+    @property
+    def open_budgets_ms(self) -> tuple[int, ...]:
+        return tuple(pending.milliseconds for pending in self._open)
+
+    @asynccontextmanager
+    async def limit(self, milliseconds: int) -> AsyncIterator[None]:
+        task = asyncio.current_task()
+        assert task is not None
+        pending = _Pending(task=task, milliseconds=milliseconds)
+        self._open.append(pending)
+        try:
+            yield
+        except asyncio.CancelledError:
+            if not pending.expired:
+                raise
+            task.uncancel()
+            raise DeadlineExceeded(f"exceeded the {milliseconds}ms budget") from None
+        finally:
+            self._open.remove(pending)
+
+    async def sleep(self, milliseconds: int) -> None:
+        self.slept_ms.append(milliseconds)
+        if self._clock is not None:
+            self._clock.advance(milliseconds)
+        await asyncio.sleep(0)
+
+    async def expire_open(self) -> tuple[int, ...]:
+        """Time out every budget currently open, reporting what those budgets were."""
+        budgets = self.open_budgets_ms
+        for pending in tuple(self._open):
+            pending.expired = True
+            pending.task.cancel()
+        await asyncio.sleep(0)
+        return budgets
+
+
+class PublicationFailure(RuntimeError):
+    """The sink refused a command, the way a broker that is down would."""
+
+
 class RecordingPublisher:
     """Records every published command and what the store held at publication time."""
 
     def __init__(self, commands: CommandStore | None = None) -> None:
         self.published: list[BehaviourCommand] = []
+        self.sent_bytes: list[str] = []
         self.stored_when_published: list[BehaviourCommand | None] = []
         self.on_publish: Callable[[], None] | None = None
+        self.fail_next = 0
+        self.attempts = 0
         self._commands = commands
+        self._gate: asyncio.Event | None = None
 
     def bind(self, commands: CommandStore) -> None:
         self._commands = commands
 
-    async def publish(self, command: BehaviourCommand) -> None:
+    def hold(self) -> None:
+        """Accept nothing until released, so a command can be stored but never sent."""
+        self._gate = asyncio.Event()
+
+    def release(self) -> None:
+        if self._gate is not None:
+            self._gate.set()
+            self._gate = None
+
+    async def publish(self, command: StoredCommand) -> None:
+        self.attempts += 1
+        gate = self._gate
+        if gate is not None:
+            await gate.wait()
+        if self.fail_next > 0:
+            self.fail_next -= 1
+            raise PublicationFailure(f"attempt {self.attempts} refused")
         if self._commands is not None:
-            self.stored_when_published.append(await self._commands.stored(command.command_id))
-        self.published.append(command)
+            self.stored_when_published.append(
+                await self._commands.stored(command.command.command_id)
+            )
+        self.published.append(command.command)
+        self.sent_bytes.append(command.serialized)
         if self.on_publish is not None:
             self.on_publish()
 

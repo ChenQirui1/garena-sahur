@@ -38,7 +38,7 @@ class Backend(NamedTuple):
 
 @asynccontextmanager
 async def backend_for(
-    router: RouterPort, tmp_path: Path, **settings: object
+    router: RouterPort, tmp_path: Path, **settings: Any
 ) -> AsyncIterator[Backend]:
     app = create_app(
         settings=Settings(database_path=tmp_path / "spotlight.sqlite3", **settings),
