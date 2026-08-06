@@ -120,6 +120,46 @@ class TierScriptRouter:
         self._previous.clear()
 
 
+class StaleSequence(ValueError):
+    """What a persistent Router raises for a sequence older than the one it accepted.
+
+    Declared here rather than imported from `backend/router/`: live Router integration is #10's,
+    and mirroring the rule keeps the owned seam provable without depending on their module.
+    """
+
+
+class StatefulRouter(TierScriptRouter):
+    """Also holds per-session-and-world sequence state, so an older snapshot is rejected.
+
+    `backend/router/router.py` does two things a stateless stand-in hides: it rejects a strictly
+    older sequence, and every accepted call overwrites its previous-tier record so the transition
+    a promotion is decided from is consumed. `TierScriptRouter` already does the second.
+    """
+
+    def __init__(
+        self,
+        tiers: dict[str, AttentionTier] | None = None,
+        default: AttentionTier = AttentionTier.AMBIENT,
+    ) -> None:
+        super().__init__(tiers, default)
+        self._sequences: dict[tuple[str, str], int] = {}
+
+    def route(self, snapshot: RoutingSnapshot) -> RoutingResult:
+        key = (snapshot.session_id, snapshot.world_id)
+        accepted = self._sequences.get(key)
+        if accepted is not None and snapshot.sequence < accepted:
+            raise StaleSequence(
+                f"sequence {snapshot.sequence} is older than accepted sequence {accepted}"
+            )
+        self._sequences[key] = snapshot.sequence
+        return super().route(snapshot)
+
+    def reset_session(self, session_id: str) -> None:
+        for key in [key for key in self._sequences if key[0] == session_id]:
+            self._sequences.pop(key, None)
+        super().reset_session(session_id)
+
+
 class FlakyRouter:
     """Wraps another router and fails on demand, so a transient outage can be staged."""
 

@@ -133,6 +133,15 @@ class RoutingResult:
 class RouterPort(Protocol):
     """One persistent Router instance per service lifecycle."""
 
-    def route(self, snapshot: RoutingSnapshot) -> RoutingResult: ...
+    def route(self, snapshot: RoutingSnapshot) -> RoutingResult:
+        """Assign tiers for one snapshot, synchronously and without performing I/O.
+
+        The backend serializes routing by never awaiting between choosing a snapshot and
+        returning from this call. A `route` that awaited, blocked, or reached a network or a
+        disk would break that, so a caller could interleave two routings of the same session
+        and the second would be handed a sequence the Router had already moved past. #3 owns
+        confirming this with Elson & Daniel.
+        """
+        ...
 
     def reset_session(self, session_id: str) -> None: ...
