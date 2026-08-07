@@ -27,6 +27,26 @@ from backend.orchestration.router_port import AttentionTier
 from backend.orchestration.telemetry_port import ModelCallFact
 
 
+class Arrivals:
+    """Await the nth time something happened, rather than a delay long enough to hope it has.
+
+    The count itself stays with whoever records it, so there is one source of truth for how
+    many arrived and this only carries the waiting.
+    """
+
+    def __init__(self, counted: Callable[[], int]) -> None:
+        self._counted = counted
+        self._arrived = asyncio.Event()
+
+    def record(self) -> None:
+        self._arrived.set()
+
+    async def wait_for(self, expected: int) -> None:
+        while self._counted() < expected:
+            self._arrived.clear()
+            await self._arrived.wait()
+
+
 class ManualClock:
     """A clock that only moves when a test moves it.
 
@@ -129,7 +149,7 @@ class RecordingPublisher:
         self.attempts = 0
         self._commands = commands
         self._gate: asyncio.Event | None = None
-        self._attempted = asyncio.Event()
+        self._attempted = Arrivals(lambda: self.attempts)
 
     def bind(self, commands: CommandStore) -> None:
         self._commands = commands
@@ -144,19 +164,13 @@ class RecordingPublisher:
             self._gate = None
 
     async def wait_for_attempt(self, expected: int) -> None:
-        """Return once ``expected`` publications have been attempted.
-
-        Each pass awaits the next attempt rather than re-checking after a delay, so a held
-        publisher is observed by the arrival itself and never by how long the wait ran.
-        """
-        while self.attempts < expected:
-            self._attempted.clear()
-            await self._attempted.wait()
+        """Return once ``expected`` publications have been attempted."""
+        await self._attempted.wait_for(expected)
 
     async def publish(self, command: StoredCommand) -> None:
         self.attempts += 1
         self.attempted_bytes.append(command.serialized)
-        self._attempted.set()
+        self._attempted.record()
         gate = self._gate
         if gate is not None:
             await gate.wait()
@@ -183,9 +197,9 @@ class GatedProvider:
     def __init__(self, inner: Provider, gated: bool = False) -> None:
         self._inner = inner
         self._gate: asyncio.Event | None = None
-        self._started = asyncio.Event()
         self._in_flight: list[GenerationRequest] = []
         self.started: list[GenerationRequest] = []
+        self._started = Arrivals(lambda: len(self.started))
         self.peak_in_flight = 0
         self._peak_by_tier: Counter[AttentionTier] = Counter()
         self._peak_by_npc: Counter[str] = Counter()
@@ -213,19 +227,16 @@ class GatedProvider:
     async def wait_for_started(self, expected: int) -> None:
         """Return once ``expected`` calls have entered the provider.
 
-        Each pass awaits the next call rather than re-checking after a delay, so what is waited
-        on is the call itself. Once these calls are held, the count is also stable without any
-        further waiting: the queue starts more work only when a slot frees or new work arrives,
-        and a held call frees nothing. Where a test needs a slot to be free before it can claim
-        the count settled, it releases the gate and drains rather than waiting out a tick.
+        Once these calls are held the count is stable without any further waiting: the queue
+        starts more work only when a slot frees or new work arrives, and a held call frees
+        nothing. Where a test needs a slot to free before it can claim the count settled, it
+        releases the gate and drains rather than waiting out a tick.
         """
-        while len(self.started) < expected:
-            self._started.clear()
-            await self._started.wait()
+        await self._started.wait_for(expected)
 
     async def generate(self, request: GenerationRequest) -> GeneratedBehaviour:
         self.started.append(request)
-        self._started.set()
+        self._started.record()
         self._in_flight.append(request)
         self._record_peaks()
         gate = self._gate

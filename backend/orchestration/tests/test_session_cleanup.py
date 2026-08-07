@@ -17,10 +17,12 @@ import pytest
 import pytest_asyncio
 
 from backend.ingestion.tests.canonical_messages import (
+    CONVERSATION_ID,
     SESSION_ID,
     SHOPKEEPER,
     active_conversation,
 )
+from backend.ingestion.turn_store import TurnStore
 from backend.orchestration.conversation_manager import ConversationState
 from backend.orchestration.observations import SESSION_CLEANED
 from backend.orchestration.router_port import RouterPort, RoutingResult, RoutingSnapshot
@@ -110,10 +112,12 @@ async def test_cleaning_one_session_leaves_another_untouched(harness: Harness) -
 
     after = await harness.durable_counts()
     assert (before.turns, after.turns) == (2, 1), "only the named session's turns are removed"
-    rows = await harness.pipeline.store.connection.execute_fetchall(
-        "SELECT session_id FROM conversation_turns"
-    )
-    assert [row[0] for row in rows] == [OTHER_SESSION]
+    turns = TurnStore(harness.pipeline.store)
+    assert await turns.recent(SESSION_ID, CONVERSATION_ID, limit=10) == ()
+    assert [
+        one.session_id
+        for one in await turns.recent(OTHER_SESSION, CONVERSATION_ID, limit=10)
+    ] == [OTHER_SESSION]
 
 
 async def test_cleaning_forgets_the_in_memory_state_as_well(harness: Harness) -> None:
@@ -156,6 +160,11 @@ async def test_a_cleaned_session_can_generate_for_the_same_turn_again(
 
 
 async def claimed_sessions(harness: Harness) -> list[str]:
+    """Which sessions still hold a durable claim.
+
+    `GenerationClaims` takes claims and never reports them, so there is no public reader to go
+    through here. Naming the sessions keeps the assertion about which claim was released.
+    """
     rows = await harness.pipeline.store.connection.execute_fetchall(
         "SELECT session_id FROM generation_claims ORDER BY session_id"
     )

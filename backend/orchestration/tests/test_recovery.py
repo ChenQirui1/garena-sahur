@@ -12,6 +12,7 @@ from __future__ import annotations
 from pathlib import Path
 
 from backend.config import Settings
+from backend.ingestion.event_store import EventStore
 from backend.ingestion.tests.canonical_messages import (
     CONVERSATION_ID,
     EVENT_ID,
@@ -20,13 +21,12 @@ from backend.ingestion.tests.canonical_messages import (
     TURN_ID,
     active_conversation,
 )
-from backend.ingestion.event_store import EventStore
 from backend.ingestion.turn_store import TurnStore
 from backend.models.mock_provider import MODEL_FOR_TIER, PROVIDER
 from backend.orchestration.conversation_manager import ConversationState
 from backend.orchestration.conversation_store import ConversationStore
-from backend.orchestration.router_port import AttentionTier
 from backend.orchestration.deduplication import ATTEMPTED, FAILED
+from backend.orchestration.router_port import AttentionTier
 from backend.orchestration.observations import (
     PROVIDER_OUTCOME_UNKNOWN,
     RECOVERED_COMMAND_REPUBLISHED,
@@ -38,14 +38,16 @@ from backend.orchestration.tests.fakes import ManualClock, RecordingPublisher
 from backend.orchestration.tests.harness import Harness, running, settings_for
 
 
-def conversations(harness: Harness) -> ConversationStore:
+def conversation_store(harness: Harness) -> ConversationStore:
     """Read persisted conversation rows the way the manager's own restore reads them."""
     return ConversationStore(harness.pipeline.store, harness.pipeline.observations)
 
 
-async def stored_state(harness: Harness, session_id: str) -> str:
-    sessions = await conversations(harness).sessions()
-    return next(one.state for one in sessions if one.session_id == session_id)
+async def stored_state(harness: Harness, session_id: str) -> ConversationState:
+    sessions = await conversation_store(harness).sessions()
+    return ConversationState(
+        next(one.state for one in sessions if one.session_id == session_id)
+    )
 
 
 async def attempt_outcomes(harness: Harness) -> list[str]:
@@ -106,7 +108,7 @@ async def test_durable_state_survives_reopening_the_same_database(tmp_path: Path
         event = await EventStore(second.pipeline.store).latest(SESSION_ID, EVENT_ID)
         assert event is not None and event.event.event_id == EVENT_ID
 
-        threads = await conversations(second).threads()
+        threads = await conversation_store(second).threads()
         assert [one.conversation_id for one in threads] == [CONVERSATION_ID]
 
         counts = await second.durable_counts()
