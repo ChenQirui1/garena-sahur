@@ -9,10 +9,13 @@ import asyncio
 import json
 import sys
 from pathlib import Path
-from typing import Any, Iterable
+from typing import TYPE_CHECKING, Any, Iterable
 
 from backend.ingestion.intake_service import IntakeOutcome, IntakeResult, IntakeService
 from backend.ingestion.message_validation import TOPIC_LEGACY_NPC_PROFILE
+
+if TYPE_CHECKING:  # The adapter itself stays free of the FastAPI application wiring.
+    from backend.main import Pipeline
 
 REJECTING_OUTCOMES = frozenset(
     {IntakeOutcome.INVALID, IntakeOutcome.UNKNOWN_TOPIC, IntakeOutcome.STORAGE_UNAVAILABLE}
@@ -65,20 +68,25 @@ def _read_record(line_number: int, line: str) -> tuple[str, dict[str, Any]]:
     return record["topic"], record["message"]
 
 
+async def replay_jsonl(path: Path, pipeline: Pipeline) -> list[IntakeResult]:
+    """Run one file through the same pipeline lifecycle the service runs, and drain it.
+
+    Draining before returning is what makes the outcomes reportable: intake accepts a turn by
+    queueing generation, so a replay that stopped at the intake result would be reporting
+    success over work it was about to throw away.
+    """
+    async with pipeline.running():
+        results = await submit_jsonl(path.read_text().splitlines(), pipeline.intake)
+        await pipeline.drain()
+    return results
+
+
 async def _replay(path: Path) -> None:
     # Imported here so the adapter itself stays free of the FastAPI application wiring.
     from backend.config import load_settings
     from backend.main import build_pipeline
 
-    pipeline = build_pipeline(load_settings())
-    await pipeline.store.open()
-    await pipeline.handoff.start()
-    try:
-        results = await submit_jsonl(path.read_text().splitlines(), pipeline.intake)
-        await pipeline.handoff.wait_until_idle()
-    finally:
-        await pipeline.handoff.stop()
-        await pipeline.store.close()
+    results = await replay_jsonl(path, build_pipeline(load_settings()))
 
     for outcome in IntakeOutcome:
         submitted = sum(1 for result in results if result.outcome is outcome)

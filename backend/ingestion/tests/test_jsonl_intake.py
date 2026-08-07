@@ -11,15 +11,25 @@ import pytest_asyncio
 
 from backend.config import Settings
 from backend.ingestion.intake_service import IntakeOutcome, IntakeService
-from backend.ingestion.jsonl_intake import JsonlIntakeError, submit_jsonl
+from backend.ingestion.jsonl_intake import JsonlIntakeError, replay_jsonl, submit_jsonl
 from backend.ingestion.message_validation import (
+    TOPIC_CONVERSATION_TURN,
     TOPIC_LEGACY_NPC_PROFILE,
     TOPIC_WORLD_SNAPSHOT,
 )
-from backend.ingestion.tests.canonical_messages import SESSION_ID, WORLD_ID, world_snapshot
-from backend.main import Adapters, build_pipeline
+from backend.ingestion.tests.canonical_messages import (
+    SESSION_ID,
+    SHOPKEEPER,
+    WORLD_ID,
+    active_conversation,
+    conversation_turn,
+    world_snapshot,
+)
+from backend.main import Adapters, Pipeline, build_pipeline
 from backend.orchestration.router_handoff import RouterHandoff
+from backend.orchestration.router_port import RoutingResult, RoutingSnapshot
 from backend.orchestration.tests.fake_routers import RecordingRouter
+from backend.orchestration.tests.harness import settings_for
 
 SNAPSHOT_TOPIC = TOPIC_WORLD_SNAPSHOT
 
@@ -94,6 +104,57 @@ async def test_a_legacy_profile_record_is_ignored_rather_than_failing_the_replay
     assert (ignored.outcome, applied.outcome) == (IntakeOutcome.IGNORED, IntakeOutcome.APPLIED)
     assert ignored.detail is not None and "ignored" in ignored.detail
     assert len(router.routed) == 1
+
+
+class ReadinessProbe(RecordingRouter):
+    """Records whether the pipeline was ready at the moment the replay reached the Router."""
+
+    def __init__(self) -> None:
+        super().__init__()
+        self.pipeline: Pipeline | None = None
+        self.ready_while_routing: list[bool] = []
+
+    def route(self, snapshot: RoutingSnapshot) -> RoutingResult:
+        assert self.pipeline is not None
+        self.ready_while_routing.append(self.pipeline.is_ready)
+        return super().route(snapshot)
+
+
+async def test_a_replayed_player_turn_ends_with_a_stored_command(tmp_path: Path) -> None:
+    """The replay owes the same lifecycle as the service, not merely accepted messages.
+
+    Generation is queued rather than run inline, so an `applied` outcome says only that intake
+    took the turn. Reopening the store afterwards is what proves the queued work was dispatched
+    and committed before the replay reported anything.
+    """
+    router = ReadinessProbe()
+    pipeline = build_pipeline(settings_for(tmp_path), Adapters(router=router))
+    router.pipeline = pipeline
+    path = tmp_path / "replay.jsonl"
+    path.write_text(
+        "\n".join(
+            [
+                record(SNAPSHOT_TOPIC, world_snapshot(active_conversation=active_conversation())),
+                record(TOPIC_CONVERSATION_TURN, conversation_turn()),
+            ]
+        )
+    )
+
+    results = await replay_jsonl(path, pipeline)
+
+    assert [result.outcome for result in results] == [
+        IntakeOutcome.APPLIED,
+        IntakeOutcome.APPLIED,
+    ]
+    assert pipeline.scheduler.pending_count == 0
+    assert router.ready_while_routing and all(router.ready_while_routing)
+
+    await pipeline.store.open()
+    try:
+        command = await pipeline.commands.latest_for(SESSION_ID, SHOPKEEPER)
+    finally:
+        await pipeline.store.close()
+    assert command is not None and command.turn_id == conversation_turn()["turn_id"]
 
 
 @pytest.mark.parametrize(

@@ -50,6 +50,15 @@ from backend.orchestration.session_cleanup import SessionCleanup
 from backend.orchestration.telemetry_port import LoggingTelemetry, TelemetryPort
 
 
+# Routing can queue generation and generation can re-route, so draining alternates between the
+# two until neither has anything left rather than draining each once.
+DRAIN_ROUNDS = 8
+
+
+class PipelineNotDrained(RuntimeError):
+    """Routing and generation kept producing work for each other, so nothing may be reported."""
+
+
 @dataclass(frozen=True, slots=True)
 class Adapters:
     """The seams a test or a later integration ticket replaces."""
@@ -84,6 +93,43 @@ class Pipeline:
             and self.store.is_open
             and self.handoff.is_running
             and self.scheduler.is_running
+        )
+
+    @asynccontextmanager
+    async def running(self) -> AsyncIterator[None]:
+        """Start every stage, in the one order any entry point may start them in.
+
+        Every transport adapter runs the whole pipeline or none of it. A second start order,
+        even a correct one, is how the JSONL replay came to run without the generation
+        scheduler and to discard whatever it queued.
+        """
+        await self.store.open()
+        await self.handoff.start()
+        await self.scheduler.start()
+        # Recovery runs after the scheduler so a republished command has somewhere to go, and
+        # before intake opens so a redelivered turn cannot race the work it is recovering.
+        await self.recovery.run()
+        try:
+            yield
+        finally:
+            await self.scheduler.stop()
+            await self.handoff.stop()
+            await self.store.close()
+
+    async def drain(self) -> None:
+        """Wait until routing and generation have both stopped producing work for each other.
+
+        A caller that reports what a batch of messages produced has to know the pipeline
+        finished with them; failing loudly is the alternative to reporting a summary while work
+        is still queued.
+        """
+        for _ in range(DRAIN_ROUNDS):
+            await self.handoff.wait_until_idle()
+            await self.scheduler.drain()
+            if self.handoff.is_idle and self.scheduler.pending_count == 0:
+                return
+        raise PipelineNotDrained(
+            f"routing and generation did not settle within {DRAIN_ROUNDS} rounds"
         )
 
 
@@ -223,18 +269,8 @@ def create_app(settings: Settings | None = None, adapters: Adapters = Adapters()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        await pipeline.store.open()
-        await pipeline.handoff.start()
-        await pipeline.scheduler.start()
-        # Recovery runs after the scheduler so a republished command has somewhere to go, and
-        # before intake opens so a redelivered turn cannot race the work it is recovering.
-        await pipeline.recovery.run()
-        try:
+        async with pipeline.running():
             yield
-        finally:
-            await pipeline.scheduler.stop()
-            await pipeline.handoff.stop()
-            await pipeline.store.close()
 
     app = FastAPI(title="Spotlight backend", lifespan=lifespan)
     app.state.settings = settings
