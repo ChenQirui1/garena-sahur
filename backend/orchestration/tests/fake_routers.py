@@ -211,6 +211,34 @@ class FlakyRouter:
         return None
 
 
+class OmittingRouter:
+    """Wraps another router and drops one candidate's assignment on demand.
+
+    `docs/message_schemas.md` §5 requires every candidate to appear exactly once, so this is a
+    Router defect rather than a shape a real Router may produce. It exists because the defect is
+    invisible from the result alone: the omission is only detectable against the snapshot that
+    was routed.
+    """
+
+    def __init__(self, inner: object, omitted: str | None = None) -> None:
+        self.inner = inner
+        self.omitted = omitted
+
+    def route(self, snapshot: RoutingSnapshot) -> RoutingResult:
+        result: RoutingResult = self.inner.route(snapshot)  # type: ignore[attr-defined]
+        if self.omitted is None:
+            return result
+        return replace(
+            result,
+            assignments=tuple(
+                one for one in result.assignments if one.npc_id != self.omitted
+            ),
+        )
+
+    def reset_session(self, session_id: str) -> None:
+        self.inner.reset_session(session_id)  # type: ignore[attr-defined]
+
+
 class RaisingRouter:
     def __init__(self, failure: Exception | None = None) -> None:
         self.failure = failure or RuntimeError("router exploded")

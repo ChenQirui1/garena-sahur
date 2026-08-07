@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Awaitable, Callable
 
+from backend.orchestration.observations import ROUTING_FAILED_CLOSED, Observations
 from backend.orchestration.router_port import (
     RESULT_SCHEMA_VERSION,
     RESULT_TYPE,
@@ -56,8 +57,9 @@ class RoutingOutcome:
 class RouterHandoff:
     """Route the newest pending snapshot per session and world, one call at a time."""
 
-    def __init__(self, router: RouterPort) -> None:
+    def __init__(self, router: RouterPort, observations: Observations) -> None:
         self._router = router
+        self._observations = observations
         self._pending: dict[tuple[str, str], RoutingSnapshot] = {}
         self._outcomes: dict[tuple[str, str], RoutingOutcome] = {}
         self._routed_sequences: dict[tuple[str, str], int] = {}
@@ -215,6 +217,10 @@ class RouterHandoff:
             logger.exception("router call failed for session %s", snapshot.session_id)
             return self._failed(snapshot, RoutingStatus.ROUTER_FAILED, repr(failure))
 
+        # Sequence is checked here and the rest of the documented correspondence in
+        # `_reject_reason`, because losing a race is not the same event as a broken Router: a
+        # persistent Router answering an older sequence is expected under coalescing, while a
+        # mismatched session, world, or timestamp on the sequence it did answer is a defect.
         if isinstance(result, RoutingResult) and result.sequence != snapshot.sequence:
             reason = f"result answers sequence {result.sequence}, not {snapshot.sequence}"
             logger.warning("discarding a stale router result: %s", reason)
@@ -235,10 +241,25 @@ class RouterHandoff:
             diagnostics=result.diagnostics,
         )
 
-    @staticmethod
     def _failed(
-        snapshot: RoutingSnapshot, status: RoutingStatus, reason: str
+        self, snapshot: RoutingSnapshot, status: RoutingStatus, reason: str
     ) -> RoutingOutcome:
+        """Produce no assignment, and say so where a demotion cannot be mistaken for it.
+
+        Downstream, an NPC absent from a routed result has its queued work cancelled as a
+        demotion. A routing that never became assignments must therefore be visible as its own
+        thing, or a Router defect and a deliberate demotion are the same silence. `status`
+        carries which of the three it was; the name covers all of them because from here the
+        NPC's position is identical — nothing was assigned and nothing may be inferred.
+        """
+        self._observations.note(
+            ROUTING_FAILED_CLOSED,
+            session_id=snapshot.session_id,
+            world_id=snapshot.world_id,
+            sequence=snapshot.sequence,
+            status=status,
+            reason=reason,
+        )
         return RoutingOutcome(
             session_id=snapshot.session_id,
             world_id=snapshot.world_id,
@@ -249,7 +270,13 @@ class RouterHandoff:
 
 
 def _reject_reason(result: object, snapshot: RoutingSnapshot) -> str | None:
-    """Describe why a Router result cannot be trusted, or ``None`` when it can."""
+    """Describe why a Router result cannot be trusted, or ``None`` when it can.
+
+    Two of `docs/message_schemas.md` §5's invariants are deliberately not checked. `changed`
+    "indicates a transition from a known previous tier", and the previous tier is Router-private
+    state the backend does not hold, so nothing here could tell an honest flag from a wrong one.
+    Tie determinism is likewise a property of how the result was produced, not of the result.
+    """
     if not isinstance(result, RoutingResult):
         return "result is not a routing result"
     if result.schema_version != RESULT_SCHEMA_VERSION:
@@ -258,6 +285,15 @@ def _reject_reason(result: object, snapshot: RoutingSnapshot) -> str | None:
         return f"unexpected result_type {result.result_type!r}"
     if (result.session_id, result.world_id) != (snapshot.session_id, snapshot.world_id):
         return "result answers another session or world"
+    # §5 requires the timestamp to correspond to the input snapshot, and the document's worked
+    # example carries one value unchanged from `world.snapshot` through `routing_snapshot` to
+    # `routing_result`, exactly as it carries the sequence. `backend/router/router.py` echoes
+    # `snapshot.timestamp_ms` for the same reason. Correspondence is therefore equality, not a
+    # tolerance nobody stated.
+    if result.timestamp_ms != snapshot.timestamp_ms:
+        return (
+            f"result carries timestamp_ms {result.timestamp_ms}, not {snapshot.timestamp_ms}"
+        )
     if not isinstance(result.assignments, (list, tuple)):
         return "assignments is not a sequence"
 
@@ -273,6 +309,10 @@ def _reject_reason(result: object, snapshot: RoutingSnapshot) -> str | None:
         if assignment.npc_id in assigned:
             return f"{assignment.npc_id} was assigned more than once"
         assigned.add(assignment.npc_id)
+
+    omitted = candidate_ids - assigned
+    if omitted:
+        return f"no tier was assigned for {', '.join(sorted(omitted))}"
 
     return _reject_reported_totals_reason(result)
 
