@@ -16,6 +16,7 @@ from __future__ import annotations
 import ast
 from pathlib import Path
 
+from backend.tests.owned_paths import tracked_owned_paths
 from backend.tests.tracked_documents import (
     JEROME_AND_RICHARD,
     REPO_ROOT,
@@ -70,6 +71,20 @@ def test_the_ownership_tree_is_read_rather_than_restated() -> None:
     grouped = backend_packages_by_owner()
 
     assert len(grouped) >= 2, "expected at least two distinct owners in the tracked tree"
+
+
+def test_every_path_the_tree_assigns_to_us_exists_under_that_name() -> None:
+    """The tree names our modules, and a name the team wrote down is a name we owe them.
+
+    A file quietly renamed still passes every behavioural case here — the suite imports what
+    exists — while a teammate reading the tracked document looks for something that is gone.
+    """
+    missing = sorted(path for path in tracked_owned_paths() if not (REPO_ROOT / path).exists())
+
+    assert missing == [], (
+        f"docs/team-architecture.md assigns these to us and nothing is there: {missing}. "
+        "Either restore the name or change the document with the team."
+    )
 
 
 def test_no_owned_module_imports_another_owners_package() -> None:
