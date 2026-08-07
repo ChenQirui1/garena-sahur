@@ -508,20 +508,63 @@ async def test_provider_concurrency_is_bounded_per_tier_and_in_total(
     assert harness.provider.peak_in_flight == 8
 
 
+async def test_the_total_limit_binds_while_every_tier_still_has_room(
+    tmp_path: Path,
+) -> None:
+    """Eight total is its own rule, and the default cannot show it.
+
+    Specification #1 caps concurrency at two Focused, six Reactive *and* eight total, but two
+    plus six is eight: under the defaults, enforcing the total and not enforcing it give the
+    same answer, so the case above passes with the total limit deleted. Binding the total below
+    the tier sum is the only scene where the rule is visible on its own. Every candidate here
+    is Reactive and its tier is nowhere near full, so nothing but the total can hold the fifth
+    call back.
+    """
+    router = TierScriptRouter({}, default=REACTIVE)
+    async for harness in running(
+        settings_for(tmp_path, total_concurrency=4), router=router, gated=True
+    ):
+        await harness.ingest("world.snapshot", crowd_snapshot(sequence=1))
+        await harness.settle_routing()
+
+        await harness.event(
+            actor_npc_ids=list(CROWD[:6]), target_npc_ids=list(CROWD[6:]), responder_npc_ids=[]
+        )
+        await harness.provider.wait_for_started(4)
+
+        assert harness.provider.peak_in_flight_for(REACTIVE) == 4, "below the Reactive six"
+        assert harness.pending_generation_count() > 0, "the rest are held by the total alone"
+
+        harness.provider.release_all()
+        await harness.settle()
+
+    assert harness.provider.peak_in_flight == 4
+
+
 async def test_one_request_is_in_flight_per_npc(conversation: Harness) -> None:
+    """The second turn arrives once the first is already in flight, which is the only scene
+    where the per-NPC slot is what serialises them.
+
+    Sending both before either starts does not test this rule: the second turn is still
+    unconfirmed when the first is admitted, so it is not queued yet and nothing about the
+    in-flight slot decides anything. Here the second turn is genuinely waiting with a free
+    Focused slot and a free total slot, so its own NPC being busy is the only thing left.
+    """
     await conversation.snapshot(sequence=1, active_conversation=active_conversation())
     await conversation.settle_routing()
     conversation.provider.gate()
 
     await conversation.turn()
-    await conversation.turn(turn_id="turn-005", turn_index=5, text="And after that?")
     await conversation.provider.wait_for_started(1)
+    await conversation.turn(turn_id="turn-005", turn_index=5, text="And after that?")
 
+    assert conversation.pending_generation_count() == 1, "the second turn must be waiting"
     assert conversation.provider.peak_in_flight_for_npc(SHOPKEEPER) == 1
 
     conversation.provider.release_all()
     await conversation.settle()
 
+    assert len(conversation.provider.started) == 2, "both turns are answered, one at a time"
     assert conversation.provider.peak_in_flight_for_npc(SHOPKEEPER) == 1
 
 
