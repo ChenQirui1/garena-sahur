@@ -31,7 +31,6 @@ from backend.orchestration.generation_coordinator import (
     GenerationCoordinator,
     request_from_record,
 )
-from backend.orchestration.generation_policy import Trigger
 from backend.orchestration.observations import (
     PROVIDER_OUTCOME_UNKNOWN,
     RECOVERED_COMMAND_REPUBLISHED,
@@ -116,7 +115,7 @@ class Recovery:
             await self._attempts.close(attempt.claim_key, FAILED)
             command = await self._generation.fallback_for(request)
             delivered = await self._publisher.publish(command)
-            await self._note_conversation(request.trigger, request.session_id, delivered)
+            await self._conversation.note_command_outcome(command, delivered)
             answered += 1
         return answered
 
@@ -130,25 +129,12 @@ class Recovery:
                 command_id=stored.command.command_id,
             )
             delivered = await self._publisher.deliver(stored)
-            # A command carrying a turn identity is the answer to that turn, so delivering it
-            # or letting it expire moves the conversation exactly as it would have before the
-            # restart. Neither branch generates anything.
-            if stored.command.turn_id is not None:
-                await self._note_conversation(
-                    Trigger.TURN.value, stored.command.session_id, delivered
-                )
+            # Delivering a stored command, or letting it expire, moves the conversation exactly
+            # as it would have before the restart, because the same predicate decides both.
+            # Neither branch generates anything.
+            await self._conversation.note_command_outcome(stored.command, delivered)
             republished += 1
         return republished
-
-    async def _note_conversation(
-        self, trigger: str, session_id: str, delivered: bool
-    ) -> None:
-        if trigger != Trigger.TURN.value:
-            return
-        if delivered:
-            await self._conversation.note_published(session_id)
-        else:
-            await self._conversation.note_not_generated(session_id)
 
 
 def _unknown_outcome_fact(

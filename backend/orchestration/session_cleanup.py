@@ -7,6 +7,10 @@ which is a rule about what startup must *not* do as much as about what this does
 the backend deletes durable state: a new conversation, a reopened database, and a restart all
 leave every row alone, so the only way evidence disappears is a deliberate call to this.
 
+Every durable table names its session in a column, so removal is one comparison per table and
+never a match against the shape of a key. Nothing constrains the characters in a session id, and
+a pattern would read `_` and `%` in one as wildcards standing for another session's evidence.
+
 It crosses every durable store plus the Router's own per-session state, which is why it is here
 rather than on any one of them. Router state matters because previous tiers and accepted
 sequences would otherwise outlive the session they describe, and a fresh demo run on the same
@@ -60,14 +64,6 @@ class SessionCleanup:
                 f"DELETE FROM {table} WHERE session_id = ?", (session_id,)
             )
             removed[table] = cursor.rowcount
-
-        # Generation claims are keyed by the claim string rather than by a session column, and
-        # `generation_policy.claim_key` puts the session in its second field. Matching that
-        # prefix is what makes a cleaned session able to generate for the same trigger again.
-        cursor = await connection.execute(
-            "DELETE FROM generation_claims WHERE claim_key LIKE ?", (f"%|{session_id}|%",)
-        )
-        removed["generation_claims"] = cursor.rowcount
         await connection.commit()
 
         self._world_state.forget(session_id)

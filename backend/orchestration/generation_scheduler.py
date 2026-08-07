@@ -42,7 +42,7 @@ class Executor(Protocol):
 
     async def generate(self, work: Generation) -> BehaviourCommand | None: ...
 
-    async def publish(self, work: Generation, command: BehaviourCommand) -> None: ...
+    async def publish(self, command: BehaviourCommand) -> None: ...
 
     def abandon(self, work: Generation, reason: str) -> None: ...
 
@@ -193,7 +193,9 @@ class GenerationScheduler:
             await self._abandon(work, stale)
             return
 
-        if not await self._claims.claim(work.claim_key, self._clock.now_ms()):
+        if not await self._claims.claim(
+            work.claim_key, work.session_id, self._clock.now_ms()
+        ):
             await self._abandon(work, "generation was already claimed")
             return
 
@@ -207,7 +209,7 @@ class GenerationScheduler:
             await self._abandon(work, f"late provider output discarded: {stale}")
             return
 
-        await executor.publish(work, command)
+        await executor.publish(command)
 
     async def _abandon(self, work: Generation, reason: str) -> None:
         """Record why this work produced nothing, and release the conversation if it held it.

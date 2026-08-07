@@ -48,6 +48,7 @@ SCHEMA = (
     """
     CREATE TABLE IF NOT EXISTS generation_claims (
         claim_key TEXT PRIMARY KEY,
+        session_id TEXT NOT NULL,
         claimed_at_ms INTEGER NOT NULL
     )
     """,
@@ -102,6 +103,11 @@ SCHEMA = (
 ADDED_COLUMNS = (
     ("behaviour_commands", "publication_status", "TEXT NOT NULL DEFAULT 'pending'"),
     ("behaviour_commands", "published_at_ms", "INTEGER"),
+    # A claim written by an earlier build named its session only inside the claim key, and this
+    # column is the reason cleanup no longer has to read it back out of one. Those rows keep the
+    # empty default, so they belong to no session and outlive every cleanup — which is the
+    # conservative direction, because opening a database may not destroy evidence.
+    ("generation_claims", "session_id", "TEXT NOT NULL DEFAULT ''"),
 )
 
 # Every table holding durable per-session state, so explicit cleanup cannot miss one by being
@@ -109,6 +115,7 @@ ADDED_COLUMNS = (
 SESSION_TABLES = (
     "conversation_turns",
     "game_events",
+    "generation_claims",
     "behaviour_commands",
     "provider_attempts",
     "conversation_sessions",

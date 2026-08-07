@@ -28,12 +28,18 @@ class GenerationClaims:
     def __init__(self, store: DurableStore) -> None:
         self._store = store
 
-    async def claim(self, key: str, at_ms: int) -> bool:
-        """Take ``key`` for this caller; report ``False`` when it was already taken."""
+    async def claim(self, key: str, session_id: str, at_ms: int) -> bool:
+        """Take ``key`` for this caller; report ``False`` when it was already taken.
+
+        The session is stored alongside the key rather than left to be read back out of it.
+        Cleanup is the only other reader, and recovering a session from a composite string
+        means matching its shape — which is not something a session id may be asked to survive.
+        """
         connection = self._store.connection
         cursor = await connection.execute(
-            "INSERT OR IGNORE INTO generation_claims (claim_key, claimed_at_ms) VALUES (?, ?)",
-            (key, at_ms),
+            "INSERT OR IGNORE INTO generation_claims (claim_key, session_id, claimed_at_ms)"
+            " VALUES (?, ?, ?)",
+            (key, session_id, at_ms),
         )
         await connection.commit()
         return cursor.rowcount == 1

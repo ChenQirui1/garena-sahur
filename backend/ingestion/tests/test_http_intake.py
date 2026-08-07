@@ -249,6 +249,17 @@ async def test_an_invalid_snapshot_is_rejected_before_state_changes(backend: Bac
     assert (await observe_routing(backend))[0] == 404
 
 
+async def test_a_snapshot_without_a_session_id_keys_no_state(backend: Backend) -> None:
+    """An empty session id is refused at the boundary rather than becoming a store key."""
+    code, body = await ingest(backend, TOPIC_WORLD_SNAPSHOT, world_snapshot(session_id=""))
+
+    assert code == 422
+    assert body["outcome"] == "invalid"
+    assert "session_id" in body["detail"]
+    assert backend.router.routed == []
+    assert (await backend.client.get(f"/routing//{WORLD_ID}")).status_code == 404
+
+
 async def test_a_snapshot_is_never_rejected_for_the_size_of_its_candidate_set(
     backend: Backend,
 ) -> None:

@@ -30,6 +30,7 @@ from backend.orchestration.observations import (
 )
 from backend.orchestration.recovery import UNKNOWN_OUTCOME_ERROR_CODE
 from backend.orchestration.telemetry_port import STATUS_ERROR
+from backend.orchestration.tests.fake_routers import TierScriptRouter
 from backend.orchestration.tests.fakes import ManualClock, RecordingPublisher
 from backend.orchestration.tests.harness import Harness, running, settings_for
 
@@ -271,6 +272,75 @@ async def test_starting_up_deletes_no_durable_evidence(tmp_path: Path) -> None:
 
     assert after == before
     assert before[0][0] == 1 and before[0][2] == 1
+
+
+async def promote_onto_a_waiting_turn(harness: Harness, router: TierScriptRouter) -> None:
+    """Reach the one command that carries a turn identity without a turn having triggered it.
+
+    The player speaks while the shopkeeper is Ambient, so the turn itself generates nothing and
+    the conversation falls back to ENGAGED. The promotion that follows finds that same turn
+    still waiting for an answer, so the command it produces carries the turn — which is the
+    case where deciding from the trigger and deciding from the command disagree.
+    """
+    await harness.snapshot(sequence=1, active_conversation=active_conversation())
+    await harness.turn()
+    await harness.settle()
+    assert harness.published_for(SHOPKEEPER) == []
+    assert harness.state() is ConversationState.ENGAGED
+
+    router.tiers[SHOPKEEPER] = AttentionTier.FOCUSED
+    await harness.snapshot(sequence=2, active_conversation=active_conversation())
+
+
+async def test_a_promotion_carrying_a_turn_moves_the_conversation_the_same_way_either_side_of_a_restart(
+    tmp_path: Path,
+) -> None:
+    """One rule decides this, so where the command was published cannot change the answer."""
+    live_path = tmp_path / "live"
+    live_path.mkdir()
+    live_settings = settings_for(live_path)
+    async for live in running(
+        live_settings, router=TierScriptRouter({SHOPKEEPER: AttentionTier.AMBIENT})
+    ):
+        router = live.router
+        assert isinstance(router, TierScriptRouter)
+        await promote_onto_a_waiting_turn(live, router)
+        await live.settle()
+
+        assert [command.turn_id for command in live.published_for(SHOPKEEPER)] == [TURN_ID]
+        live_state = live.state()
+
+    restarted_path = tmp_path / "restarted"
+    restarted_path.mkdir()
+    settings = settings_for(restarted_path)
+    publisher = RecordingPublisher()
+    clock = ManualClock()
+
+    async for first in running(
+        settings,
+        router=TierScriptRouter({SHOPKEEPER: AttentionTier.AMBIENT}),
+        publisher=publisher,
+        clock=clock,
+    ):
+        router = first.router
+        assert isinstance(router, TierScriptRouter)
+        publisher.hold()
+        await promote_onto_a_waiting_turn(first, router)
+        await first.provider.started_after(1)
+        for _ in range(50):
+            if publisher.attempts:
+                break
+            await first.settle_routing()
+        assert len(await first.pipeline.commands.unpublished()) == 1
+
+    publisher.release()
+    async for second in running(settings, publisher=publisher, clock=clock):
+        await second.settle()
+
+        assert second.pipeline.recovery.last.republished_commands == 1
+        assert [command.turn_id for command in publisher.published] == [TURN_ID]
+        assert second.state() == live_state
+        assert live_state is ConversationState.READY
 
 
 async def test_a_redelivered_turn_after_a_restart_buys_no_second_call(
