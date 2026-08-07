@@ -11,22 +11,31 @@ catch the next stage being forgotten — the forgotten stage is exactly the one 
 from __future__ import annotations
 
 import ast
+from dataclasses import fields
 from pathlib import Path
 
+from backend.main import Pipeline
 from backend.tests.test_module_boundaries import owned_sources
 from backend.tests.tracked_documents import REPO_ROOT
 
 MAIN = REPO_ROOT / "backend" / "main.py"
 LIFECYCLE_HELPER = "running"
 
-# The pipeline stages, and the calls that start or stop one. Naming both directions matters:
-# a stage stopped in the wrong place outlives the store it writes to.
-STAGES = frozenset({"store", "handoff", "scheduler", "recovery"})
+# Read from the pipeline rather than listed, because a listed name is exactly what a newly added
+# stage would not be in — and a stage nothing here knows about is the drift this file exists for.
+STAGES = frozenset(field.name for field in fields(Pipeline))
+
+# The calls that start or stop a stage. Naming both directions matters: a stage stopped in the
+# wrong place outlives the store it writes to.
 TRANSITIONS = frozenset({"open", "close", "start", "stop", "run"})
 
 
 def stage_transitions(source: Path) -> list[tuple[int, str]]:
-    """Every ``<stage>.<transition>()`` call in one file, with the line it sits on."""
+    """Every ``<stage>.<transition>()`` call in one file, with the line it sits on.
+
+    The receiver has to be written as an attribute of something, which is how every entry point
+    reaches a stage today. A stage first bound to a local name would escape this.
+    """
     found = []
     for node in ast.walk(ast.parse(source.read_text())):
         if not isinstance(node, ast.Call):

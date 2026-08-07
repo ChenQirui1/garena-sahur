@@ -55,6 +55,10 @@ from backend.orchestration.telemetry_port import LoggingTelemetry, TelemetryPort
 DRAIN_ROUNDS = 8
 
 
+class PipelineNotReady(RuntimeError):
+    """Something a drain waits on is not running, so waiting on it would never return."""
+
+
 class PipelineNotDrained(RuntimeError):
     """Routing and generation kept producing work for each other, so nothing may be reported."""
 
@@ -121,11 +125,14 @@ class Pipeline:
 
         A caller that reports what a batch of messages produced has to know the pipeline
         finished with them; failing loudly is the alternative to reporting a summary while work
-        is still queued. A stage that is not running would never make the queue empty, so
-        waiting on it is an unbounded hang rather than a drain, and it is refused here.
+        is still queued. An unready pipeline is refused rather than waited on: a stage that is
+        not running never empties its queue, and one that could not load its documents would
+        drain to a summary the HTTP path answers 503 for.
         """
-        if not (self.handoff.is_running and self.scheduler.is_running):
-            raise PipelineNotDrained("routing and generation are not both running")
+        if not self.is_ready:
+            raise PipelineNotReady(
+                self.readiness_error or "the owned pipeline is not running every stage"
+            )
 
         for _ in range(DRAIN_ROUNDS):
             await self.handoff.wait_until_idle()

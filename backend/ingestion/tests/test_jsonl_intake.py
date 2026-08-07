@@ -25,7 +25,7 @@ from backend.ingestion.tests.canonical_messages import (
     conversation_turn,
     world_snapshot,
 )
-from backend.main import Adapters, Pipeline, build_pipeline
+from backend.main import Adapters, Pipeline, PipelineNotReady, build_pipeline
 from backend.orchestration.router_handoff import RouterHandoff
 from backend.orchestration.router_port import RoutingResult, RoutingSnapshot
 from backend.orchestration.tests.fake_routers import RecordingRouter
@@ -155,6 +155,27 @@ async def test_a_replayed_player_turn_ends_with_a_stored_command(tmp_path: Path)
     finally:
         await pipeline.store.close()
     assert command is not None and command.turn_id == conversation_turn()["turn_id"]
+
+
+async def test_a_replay_reports_nothing_when_the_pipeline_never_became_ready(
+    tmp_path: Path,
+) -> None:
+    """An unreadable profile document is a 503 on the HTTP path, so it is not a clean replay."""
+    pipeline = build_pipeline(settings_for(tmp_path, profiles="{ not a document"))
+    path = tmp_path / "replay.jsonl"
+    path.write_text(record(SNAPSHOT_TOPIC, world_snapshot()))
+
+    with pytest.raises(PipelineNotReady):
+        await replay_jsonl(path, pipeline)
+
+
+async def test_a_pipeline_that_is_not_running_is_refused_rather_than_waited_on(
+    tmp_path: Path,
+) -> None:
+    pipeline = build_pipeline(settings_for(tmp_path))
+
+    with pytest.raises(PipelineNotReady):
+        await pipeline.drain()
 
 
 @pytest.mark.parametrize(

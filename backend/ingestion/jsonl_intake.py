@@ -14,7 +14,7 @@ from typing import TYPE_CHECKING, Any, Iterable
 from backend.ingestion.intake_service import IntakeOutcome, IntakeResult, IntakeService
 from backend.ingestion.message_validation import TOPIC_LEGACY_NPC_PROFILE
 
-if TYPE_CHECKING:  # The adapter itself stays free of the FastAPI application wiring.
+if TYPE_CHECKING:  # Type-only: this import never runs, so the adapter carries no FastAPI.
     from backend.main import Pipeline
 
 REJECTING_OUTCOMES = frozenset(
