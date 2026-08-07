@@ -28,6 +28,10 @@ from backend.tests.tracked_documents import REPO_ROOT
 
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "backend-owned-suite.yml"
 PYTEST_INI = REPO_ROOT / "pytest.ini"
+MYPY_INI = REPO_ROOT / "backend" / "tests" / "mypy.ini"
+
+# Where mypy would find a configuration without being told. Ours is deliberately not here.
+AUTO_DISCOVERED = ("mypy.ini", ".mypy.ini", "setup.cfg", "pyproject.toml")
 
 _QUOTED_GLOB = re.compile(r"^\s+- '([^']+)'\s*$", re.M)
 
@@ -110,10 +114,11 @@ def test_the_workflow_watches_no_path_another_owner_holds() -> None:
 
 
 def test_the_workflow_watches_its_own_definition_and_its_dependencies() -> None:
-    """A change to the trigger or the pinned dependencies has to re-run the suite."""
+    """A change to the trigger, either tool's configuration, or the pins has to re-run it."""
     globs = watched_globs()
 
     assert "pytest.ini" in globs
+    assert is_watched(str(MYPY_INI.relative_to(REPO_ROOT)), globs)
     assert "requirements.txt" in globs
     assert ".github/workflows/backend-owned-suite.yml" in globs
 
@@ -129,8 +134,8 @@ def test_both_of_the_workflows_path_filters_are_the_same() -> None:
     assert lists[0] == lists[1], "the pull-request and push path filters have drifted apart"
 
 
-def test_the_suite_is_not_run_by_naming_directories_in_the_workflow() -> None:
-    """`pytest.ini` decides collection; a workflow that lists directories would outrank it.
+def test_neither_tool_is_run_by_naming_directories_in_the_workflow() -> None:
+    """The configuration files decide scope; a workflow that lists paths would outrank them.
 
     Listing them there is how another owner's scaffolding eventually gets swept into a green tick.
     """
@@ -139,3 +144,92 @@ def test_the_suite_is_not_run_by_naming_directories_in_the_workflow() -> None:
     assert re.search(r"^\s+- run: python -m pytest\s*$", workflow, re.M), (
         "the workflow must invoke pytest with no path arguments"
     )
+    # mypy is told which configuration to read, because ours is deliberately not where it
+    # would look by itself. That is a configuration flag, not a path argument: `files` still
+    # decides the scope.
+    assert re.search(
+        rf"^\s+- run: python -m mypy --config-file {re.escape(str(MYPY_INI.relative_to(REPO_ROOT)))}\s*$",
+        workflow,
+        re.M,
+    ), "the workflow must invoke mypy with the owned configuration and no path arguments"
+
+
+def type_checked_paths() -> set[str]:
+    parsed = configparser.ConfigParser()
+    parsed.read(MYPY_INI)
+    return {path.strip() for path in parsed["mypy"]["files"].split(",")}
+
+
+def test_the_type_check_covers_what_the_suite_covers() -> None:
+    """A gate over a narrower scope than the suite is a gate with a hole in it.
+
+    `mypy.ini`'s `files` is compared against `pytest.ini`'s `testpaths` rather than against a
+    list here, so the two configurations cannot drift apart quietly. mypy legitimately covers
+    more — the production modules a test imports — and only a shortfall is a finding.
+    """
+    checked = type_checked_paths()
+
+    uncovered = [
+        path
+        for path in collected_test_paths()
+        if not any(path == one or path.startswith(f"{one}/") for one in checked)
+    ]
+
+    assert uncovered == [], (
+        f"pytest collects {uncovered} and mypy does not check it, so a type regression there "
+        f"would pass the hosted run. mypy checks: {sorted(checked)}"
+    )
+
+
+def test_no_type_configuration_sits_where_mypy_would_find_it_by_itself() -> None:
+    """Our profile must not govern a run we did not start.
+
+    A configuration at the repository root is auto-discovered, so `mypy their_file.py` from this
+    directory would apply our strict profile to Elson & Daniel's or Ivan's code — a
+    repository-wide decision, which issue #36 records as not ours to take. Ours is passed with
+    `--config-file` instead, so their runs behave exactly as they did before we adopted anything.
+    """
+    imposed = [
+        name
+        for name in AUTO_DISCOVERED
+        if (REPO_ROOT / name).is_file() and "[mypy]" in (REPO_ROOT / name).read_text()
+        or (REPO_ROOT / name).is_file() and "[tool.mypy]" in (REPO_ROOT / name).read_text()
+    ]
+
+    assert imposed == [], (
+        f"{imposed} configures mypy where it is auto-discovered, so it governs every run started "
+        f"from the repository root, including another owner's"
+    )
+
+
+def test_the_type_check_covers_every_owned_script() -> None:
+    """Naming our scripts one by one is only safe if something notices the next one."""
+    checked = type_checked_paths()
+
+    unchecked = sorted(
+        str(script.relative_to(REPO_ROOT))
+        for script in owned_scripts()
+        if str(script.relative_to(REPO_ROOT)) not in checked
+    )
+
+    assert unchecked == [], f"owned scripts mypy does not check: {unchecked}"
+
+
+def test_the_type_check_reaches_no_path_another_owner_holds() -> None:
+    """The counterpart of the paths-filter case, and the reason `scripts` is not named whole.
+
+    A bare `scripts` swept in `run_benchmark.py` and `generate_charts.py`. Both are scaffolds
+    today, so it was green; filled in, they would fail a check on a pull request that never
+    touched them and that we could not fix without crossing an ownership boundary.
+    """
+    ours = {str(script.relative_to(REPO_ROOT)) for script in owned_scripts()}
+
+    theirs = sorted(
+        path
+        for path in type_checked_paths()
+        for candidate in [(REPO_ROOT / path)]
+        if path in {"backend/router", "backend/telemetry", "tests", "scripts"}
+        or (candidate.is_file() and path.startswith("scripts/") and path not in ours)
+    )
+
+    assert theirs == [], f"mypy is checking paths another owner holds: {theirs}"

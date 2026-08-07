@@ -56,7 +56,8 @@ def documented_payload(section: str, which: int = 0) -> dict[str, Any]:
                 raise AssertionError(
                     f"section {section!r} has {len(blocks)} JSON blocks, wanted index {which}"
                 )
-            return json.loads(blocks[which])
+            payload: dict[str, Any] = json.loads(blocks[which])
+            return payload
     raise AssertionError(f"no section of {MESSAGE_SCHEMAS.name} starts with {section!r}")
 
 

@@ -18,9 +18,9 @@ from backend.context.context_builder import (
     WORLD,
     ContextSection,
     GenerationContext,
-    TriggerKind,
 )
 from backend.context.npc_profiles import NpcProfiles
+from backend.context.trigger_kind import TriggerKind
 from backend.orchestration.router_port import AttentionTier
 
 # Ambient never reaches a provider, so it has no prompt and no place in these cases.

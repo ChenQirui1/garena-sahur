@@ -99,6 +99,13 @@ def assignment(npc_id: str, tier: object = AttentionTier.FOCUSED) -> RoutingAssi
     )
 
 
+def outcome_of(handoff: RouterHandoff) -> RoutingOutcome:
+    """The canonical session and world's latest outcome, where a case means there is one."""
+    outcome = handoff.latest_outcome(SESSION_ID, WORLD_ID)
+    assert outcome is not None, "nothing was routed for the canonical session and world"
+    return outcome
+
+
 @pytest.mark.parametrize(
     "out_of_range",
     [
@@ -112,7 +119,7 @@ def assignment(npc_id: str, tier: object = AttentionTier.FOCUSED) -> RoutingAssi
 def test_the_router_never_receives_a_signal_outside_its_documented_range(
     out_of_range: dict[str, float],
 ) -> None:
-    inside_range = {
+    inside_range: dict[str, Any] = {
         "npc_id": SHOPKEEPER,
         "world_distance_blocks": 3.4,
         "viewport_center_distance": 0.07,
@@ -180,7 +187,8 @@ async def test_a_routed_snapshot_produces_assignments_for_its_candidates(
             changed=True,
         ),
     )
-    assert router.routed[0].active_conversation.target_npc_id == SHOPKEEPER
+    conversation = router.routed[0].active_conversation
+    assert conversation is not None and conversation.target_npc_id == SHOPKEEPER
 
 
 async def test_one_persistent_router_serves_every_snapshot(
@@ -202,7 +210,7 @@ async def test_pending_snapshot_work_is_coalesced_to_the_newest_sequence(
     await route(handoff, routing_snapshot(4), routing_snapshot(5), routing_snapshot(6))
 
     assert [snapshot.sequence for snapshot in router.routed] == [6]
-    assert handoff.latest_outcome(SESSION_ID, WORLD_ID).sequence == 6
+    assert outcome_of(handoff).sequence == 6
 
 
 async def test_a_router_exception_fails_closed_and_is_observable() -> None:
@@ -217,6 +225,7 @@ async def test_a_router_exception_fails_closed_and_is_observable() -> None:
     assert outcome is not None
     assert outcome.status is RoutingStatus.ROUTER_FAILED
     assert outcome.assignments == ()
+    assert outcome.failure_reason is not None
     assert "router exploded" in outcome.failure_reason
 
 
@@ -232,7 +241,9 @@ async def test_a_result_for_another_sequence_is_rejected_as_stale() -> None:
     [
         lambda snapshot: "focused",
         lambda snapshot: [{"npc_id": SHOPKEEPER, "tier": "focused"}],
-        lambda snapshot: result_for(snapshot, "focused"),
+        # A tier where the assignments belong: the wrong type is the case, so it is not
+        # corrected into a valid one.
+        lambda snapshot: result_for(snapshot, "focused"),  # type: ignore[arg-type]
         lambda snapshot: result_for(snapshot, (assignment("stranger"),)),
         lambda snapshot: result_for(
             snapshot,
@@ -428,7 +439,7 @@ async def test_a_pending_snapshot_the_trigger_overtook_is_never_routed() -> None
         await handoff.stop()
 
     assert [snapshot.sequence for snapshot in router.routed] == [7]
-    assert handoff.latest_outcome(SESSION_ID, WORLD_ID).status is RoutingStatus.ROUTED
+    assert outcome_of(handoff).status is RoutingStatus.ROUTED
 
 
 async def test_a_router_failure_on_the_trigger_path_still_fails_closed() -> None:
@@ -439,6 +450,7 @@ async def test_a_router_failure_on_the_trigger_path_still_fails_closed() -> None
 
     assert outcome.status is RoutingStatus.ROUTER_FAILED
     assert outcome.assignments == ()
+    assert outcome.failure_reason is not None
     assert "router exploded" in outcome.failure_reason
 
 
@@ -472,7 +484,8 @@ def documented_result() -> dict[str, Any]:
     section = MESSAGE_SCHEMAS.read_text().split("## 5. Router `routing_result`")[1]
     block = re.search(r"```json\n(.*?)\n```", section, re.DOTALL)
     assert block is not None, "section 5 no longer publishes a routing_result example"
-    return json.loads(block.group(1))
+    published: dict[str, Any] = json.loads(block.group(1))
+    return published
 
 
 def documented_assignments() -> tuple[RoutingAssignment, ...]:

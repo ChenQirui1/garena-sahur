@@ -88,7 +88,8 @@ async def test_the_mock_provider_is_deterministic_for_both_tiers(
 async def test_the_mock_result_is_normalised_and_costed() -> None:
     behaviour = await gateway().generate(request_for(AttentionTier.FOCUSED))
 
-    assert behaviour.dialogue == behaviour.dialogue.strip()
+    dialogue = behaviour.dialogue
+    assert dialogue is not None and dialogue == dialogue.strip()
     assert behaviour.input_tokens == 42
     assert behaviour.output_tokens > 0
 

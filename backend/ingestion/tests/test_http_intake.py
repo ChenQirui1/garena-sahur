@@ -61,7 +61,9 @@ async def backend(tmp_path: Path) -> AsyncIterator[Backend]:
         yield running
 
 
-async def ingest(backend: Backend, topic: str, message: dict) -> tuple[int, dict]:
+async def ingest(
+    backend: Backend, topic: str, message: dict[str, Any]
+) -> tuple[int, dict[str, Any]]:
     response = await backend.client.post("/ingest", json={"topic": topic, "message": message})
     await backend.handoff.wait_until_idle()
     return response.status_code, response.json()

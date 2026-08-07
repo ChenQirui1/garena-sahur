@@ -21,8 +21,13 @@
 # waiting for a status that will never arrive. Required and path-filtered are mutually exclusive —
 # if the team wants this required later, the filter comes out in the same change. See issue #44.
 #
-# mypy is not run here. It has no configuration in this repository and a standing 20-error
-# baseline, so gating on it would mean a red check from the first run.
+# mypy runs beside pytest and gates the same paths. Its `files` list decides the scope, so this
+# file cannot widen it onto another owner's package, and `--config-file` is the whole reason the
+# configuration does not sit at the repository root: a root `mypy.ini` is auto-discovered, so it
+# would impose our strict profile on Elson & Daniel's and Ivan's own runs — a repository-wide
+# decision, which issue #36 records as not ours to take. `backend/tests/**` already watches it.
+# Both tools are pinned in `requirements.txt`, so neither release can turn this check red on a
+# day nobody touched the code.
 
 name: Jerome & Richard backend suite
 
@@ -87,3 +92,5 @@ jobs:
       - run: pip install -r requirements.txt
 
       - run: python -m pytest
+
+      - run: python -m mypy --config-file backend/tests/mypy.ini

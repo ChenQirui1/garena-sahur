@@ -146,7 +146,7 @@ async def test_a_failing_provider_falls_back_without_retrying(tmp_path: Path) ->
         failing.pipeline.generation.gateway._providers = {  # noqa: SLF001
             AttentionTier.FOCUSED: broken,
             AttentionTier.REACTIVE: broken,
-        }  # type: ignore[attr-defined]
+        }
         await failing.snapshot(active_conversation=active_conversation())
         await failing.turn()
         await failing.settle()

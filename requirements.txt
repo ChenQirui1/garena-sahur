@@ -17,3 +17,6 @@ pytest==9.1.1
 pytest-asyncio==1.4.0
 httpx==0.28.1
 asgi-lifespan==2.1.0
+
+# Types
+mypy==2.3.0

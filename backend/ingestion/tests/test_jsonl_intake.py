@@ -4,7 +4,7 @@ from __future__ import annotations
 
 import json
 from pathlib import Path
-from typing import AsyncIterator
+from typing import Any, AsyncIterator
 
 import pytest
 import pytest_asyncio
@@ -40,7 +40,7 @@ from backend.orchestration.tests.harness import settings_for
 SNAPSHOT_TOPIC = TOPIC_WORLD_SNAPSHOT
 
 
-def record(topic: str, message: dict) -> str:
+def record(topic: str, message: dict[str, Any]) -> str:
     return json.dumps({"topic": topic, "message": message})
 
 
@@ -82,7 +82,8 @@ async def test_records_share_the_application_service_and_reach_the_router(
         IntakeOutcome.APPLIED,
         IntakeOutcome.STALE,
     ]
-    assert handoff.latest_outcome(SESSION_ID, WORLD_ID).sequence == 2
+    outcome = handoff.latest_outcome(SESSION_ID, WORLD_ID)
+    assert outcome is not None and outcome.sequence == 2
     assert router.routed != []
 
 
