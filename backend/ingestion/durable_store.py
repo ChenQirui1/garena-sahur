@@ -103,10 +103,17 @@ SCHEMA = (
 ADDED_COLUMNS = (
     ("behaviour_commands", "publication_status", "TEXT NOT NULL DEFAULT 'pending'"),
     ("behaviour_commands", "published_at_ms", "INTEGER"),
-    # A claim written by an earlier build named its session only inside the claim key, and this
-    # column is the reason cleanup no longer has to read it back out of one. Those rows keep the
-    # empty default, so they belong to no session and outlive every cleanup — which is the
-    # conservative direction, because opening a database may not destroy evidence.
+    # A claim written by an earlier build named its session only inside its claim key, and this
+    # column is the reason cleanup no longer has to read it back out of one. Those rows cannot be
+    # backfilled: nothing constrains the characters in a session id, so a key that separates its
+    # fields with `|` cannot be split back apart when the session itself may contain one. They
+    # keep the empty default instead, belonging to no session and outliving every cleanup, which
+    # is the conservative direction — a released claim would let one trigger buy a second model
+    # call, and opening a database may not destroy evidence either way.
+    #
+    # SQLite requires a default to add a NOT NULL column, so only this path has one. A fresh
+    # database deliberately declares the column without one, where an insert that named no
+    # session should fail rather than record an unattributed claim.
     ("generation_claims", "session_id", "TEXT NOT NULL DEFAULT ''"),
 )
 

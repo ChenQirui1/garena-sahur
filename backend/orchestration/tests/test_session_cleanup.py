@@ -163,14 +163,14 @@ async def test_a_cleaned_session_can_generate_for_the_same_turn_again(
     assert len(harness.published_for(SHOPKEEPER)) == published_before + 1
 
 
-async def claim_keys(harness: Harness) -> list[str]:
+async def claimed_sessions(harness: Harness) -> list[str]:
     rows = await harness.pipeline.store.connection.execute_fetchall(
-        "SELECT claim_key FROM generation_claims ORDER BY claim_key"
+        "SELECT session_id FROM generation_claims ORDER BY session_id"
     )
     return [str(row[0]) for row in rows]
 
 
-async def generated_for(harness: Harness, session_id: str, turn_id: str) -> None:
+async def generate_for_session(harness: Harness, session_id: str, turn_id: str) -> None:
     """Drive one session far enough to leave a durable generation claim behind."""
     await harness.snapshot(session_id=session_id, active_conversation=active_conversation())
     await harness.turn(session_id=session_id, turn_id=turn_id)
@@ -181,16 +181,15 @@ async def test_cleaning_a_session_whose_id_reads_as_a_pattern_spares_its_neighbo
     harness: Harness,
 ) -> None:
     """A session id is compared, never matched: no character in one may mean anything."""
-    await generated_for(harness, WILDCARD_SESSION, "turn-200")
-    await generated_for(harness, NEIGHBOUR_SESSION, "turn-201")
-    assert len(await claim_keys(harness)) == 2
+    await generate_for_session(harness, WILDCARD_SESSION, "turn-200")
+    await generate_for_session(harness, NEIGHBOUR_SESSION, "turn-201")
+    assert await claimed_sessions(harness) == [NEIGHBOUR_SESSION, WILDCARD_SESSION]
 
     await harness.client.delete(f"/sessions/{quote(WILDCARD_SESSION, safe='')}")
 
-    surviving = await claim_keys(harness)
-    assert surviving and all(
-        f"|{NEIGHBOUR_SESSION}|" in key for key in surviving
-    ), "only the named session's claims are released"
+    assert await claimed_sessions(harness) == [
+        NEIGHBOUR_SESSION
+    ], "only the named session's claims are released"
 
 
 async def test_restarting_without_cleanup_keeps_everything(tmp_path: Path) -> None:
