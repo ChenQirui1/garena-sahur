@@ -9,11 +9,14 @@ stays open rather than inventing a rule that could reject a legitimate publisher
 
 from __future__ import annotations
 
-from typing import Annotated, Literal
+from typing import Annotated, Final, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, StringConstraints, ValidationError, model_validator
 
-SCHEMA_VERSION = "1.0"
+# `Final` so this keeps its literal type. The models below declare `schema_version` as
+# `Literal["1.0"]`, and a constant inferred as plain `str` cannot be assigned to that — which is
+# why `turn_store` rebuilding an accepted turn from its durable row did not type-check.
+SCHEMA_VERSION: Final = "1.0"
 
 TOPIC_WORLD_SNAPSHOT = "world.snapshot"
 TOPIC_GAME_EVENT = "game.event"
