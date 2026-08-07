@@ -28,7 +28,10 @@ from backend.tests.tracked_documents import REPO_ROOT
 
 WORKFLOW = REPO_ROOT / ".github" / "workflows" / "backend-owned-suite.yml"
 PYTEST_INI = REPO_ROOT / "pytest.ini"
-MYPY_INI = REPO_ROOT / "mypy.ini"
+MYPY_INI = REPO_ROOT / "backend" / "tests" / "mypy.ini"
+
+# Where mypy would find a configuration without being told. Ours is deliberately not here.
+AUTO_DISCOVERED = ("mypy.ini", ".mypy.ini", "setup.cfg", "pyproject.toml")
 
 _QUOTED_GLOB = re.compile(r"^\s+- '([^']+)'\s*$", re.M)
 
@@ -115,7 +118,7 @@ def test_the_workflow_watches_its_own_definition_and_its_dependencies() -> None:
     globs = watched_globs()
 
     assert "pytest.ini" in globs
-    assert "mypy.ini" in globs
+    assert is_watched(str(MYPY_INI.relative_to(REPO_ROOT)), globs)
     assert "requirements.txt" in globs
     assert ".github/workflows/backend-owned-suite.yml" in globs
 
@@ -138,10 +141,17 @@ def test_neither_tool_is_run_by_naming_directories_in_the_workflow() -> None:
     """
     workflow = WORKFLOW.read_text()
 
-    for tool in ("pytest", "mypy"):
-        assert re.search(rf"^\s+- run: python -m {tool}\s*$", workflow, re.M), (
-            f"the workflow must invoke {tool} with no path arguments"
-        )
+    assert re.search(r"^\s+- run: python -m pytest\s*$", workflow, re.M), (
+        "the workflow must invoke pytest with no path arguments"
+    )
+    # mypy is told which configuration to read, because ours is deliberately not where it
+    # would look by itself. That is a configuration flag, not a path argument: `files` still
+    # decides the scope.
+    assert re.search(
+        rf"^\s+- run: python -m mypy --config-file {re.escape(str(MYPY_INI.relative_to(REPO_ROOT)))}\s*$",
+        workflow,
+        re.M,
+    ), "the workflow must invoke mypy with the owned configuration and no path arguments"
 
 
 def type_checked_paths() -> set[str]:
@@ -168,6 +178,27 @@ def test_the_type_check_covers_what_the_suite_covers() -> None:
     assert uncovered == [], (
         f"pytest collects {uncovered} and mypy does not check it, so a type regression there "
         f"would pass the hosted run. mypy checks: {sorted(checked)}"
+    )
+
+
+def test_no_type_configuration_sits_where_mypy_would_find_it_by_itself() -> None:
+    """Our profile must not govern a run we did not start.
+
+    A configuration at the repository root is auto-discovered, so `mypy their_file.py` from this
+    directory would apply our strict profile to Elson & Daniel's or Ivan's code — a
+    repository-wide decision, which issue #36 records as not ours to take. Ours is passed with
+    `--config-file` instead, so their runs behave exactly as they did before we adopted anything.
+    """
+    imposed = [
+        name
+        for name in AUTO_DISCOVERED
+        if (REPO_ROOT / name).is_file() and "[mypy]" in (REPO_ROOT / name).read_text()
+        or (REPO_ROOT / name).is_file() and "[tool.mypy]" in (REPO_ROOT / name).read_text()
+    ]
+
+    assert imposed == [], (
+        f"{imposed} configures mypy where it is auto-discovered, so it governs every run started "
+        f"from the repository root, including another owner's"
     )
 
 
