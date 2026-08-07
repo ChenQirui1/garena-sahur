@@ -285,11 +285,11 @@ def _reject_reason(result: object, snapshot: RoutingSnapshot) -> str | None:
         return f"unexpected result_type {result.result_type!r}"
     if (result.session_id, result.world_id) != (snapshot.session_id, snapshot.world_id):
         return "result answers another session or world"
-    # §5 says the timestamp "corresponds to" the input snapshot without saying how closely.
-    # Equality is the same reading already applied to the sequence in the same sentence, and the
-    # snapshot's own timestamp is carried through from the source world snapshot unchanged. A
-    # Router that stamps its own emission time instead would be refused by this; that reading is
-    # raised on #3 rather than softened here into a tolerance no document states.
+    # §5 requires the timestamp to correspond to the input snapshot, and the document's worked
+    # example carries one value unchanged from `world.snapshot` through `routing_snapshot` to
+    # `routing_result`, exactly as it carries the sequence. `backend/router/router.py` echoes
+    # `snapshot.timestamp_ms` for the same reason. Correspondence is therefore equality, not a
+    # tolerance nobody stated.
     if result.timestamp_ms != snapshot.timestamp_ms:
         return (
             f"result carries timestamp_ms {result.timestamp_ms}, not {snapshot.timestamp_ms}"
