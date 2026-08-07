@@ -170,7 +170,7 @@ def decide_for_event(
         )
 
     assignments = {one.npc_id: one for one in outcome.assignments}
-    generations: list[EventGeneration] = []
+    generations: list[Generation] = []
     suppressed: list[tuple[str, str]] = []
     for npc_id, roles in roles_by_npc.items():
         assignment = assignments.get(npc_id)
