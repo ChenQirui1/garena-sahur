@@ -280,10 +280,9 @@ async def test_a_result_that_omits_a_candidate_fails_closed() -> None:
 
     assert outcome.status is RoutingStatus.INVALID_RESULT
     assert outcome.assignments == ()
-    assert outcome.failure_reason is not None
-    assert THIEF in outcome.failure_reason
-    # The shopkeeper was assigned and is not what is wrong with this result.
-    assert SHOPKEEPER not in outcome.failure_reason
+    # Named exactly, so the reason cannot be confused with the non-candidate rejection that
+    # also mentions one NPC, nor with the shopkeeper, which this result assigned correctly.
+    assert outcome.failure_reason == f"no tier was assigned for {THIEF}"
 
 
 async def test_a_result_that_assigns_every_candidate_is_routed() -> None:
