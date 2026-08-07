@@ -24,19 +24,29 @@ def assign_tiers(
     active_conversation_target: str | None,
     previous_tiers: Mapping[str, AttentionTier],
     config: RouterConfig,
+    ranking_scores: Mapping[str, float] | None = None,
+    hysteresis_reasons: Mapping[str, str] | None = None,
 ) -> tuple[RoutingAssignment, ...]:
     """Rank candidates deterministically, select within caps, and preserve source order."""
+    effective_scores = ranking_scores or {}
+    sticky_reasons = hysteresis_reasons or {}
     ranked = sorted(
         candidates,
         key=lambda candidate: _rank_key(
-            candidate, active_conversation_target, previous_tiers
+            candidate,
+            active_conversation_target,
+            previous_tiers,
+            effective_scores,
         ),
     )
     by_id = {candidate.npc.npc_id: candidate for candidate in candidates}
     eligible = [
         candidate
         for candidate in ranked
-        if candidate.score.direct_score > config.minimum_tier_score
+        if effective_scores.get(
+            candidate.npc.npc_id, candidate.score.direct_score
+        )
+        > config.minimum_tier_score
         or candidate.npc.npc_id == active_conversation_target
     ]
 
@@ -72,13 +82,17 @@ def assign_tiers(
             selection_reason = "outside Focused and Reactive selection"
 
         previous = previous_tiers.get(npc_id)
+        hysteresis_reason = sticky_reasons.get(npc_id)
+        reasons = (*candidate.score.reasons, selection_reason)
+        if hysteresis_reason:
+            reasons = (*reasons, hysteresis_reason)
         assignments.append(
             RoutingAssignment(
                 npc_id=npc_id,
                 tier=tier,
                 previous_tier=previous,
                 changed=previous is not None and previous is not tier,
-                reasons=(*candidate.score.reasons, selection_reason),
+                reasons=reasons,
             )
         )
 
@@ -89,12 +103,13 @@ def _rank_key(
     candidate: ScoredCandidate,
     active_conversation_target: str | None,
     previous_tiers: Mapping[str, AttentionTier],
+    ranking_scores: Mapping[str, float],
 ) -> tuple[bool, float, int, float, str]:
     npc_id = candidate.npc.npc_id
     previous_priority = _PREVIOUS_TIER_PRIORITY[previous_tiers.get(npc_id)]
     return (
         npc_id != active_conversation_target,
-        -candidate.score.direct_score,
+        -ranking_scores.get(npc_id, candidate.score.direct_score),
         -previous_priority,
         candidate.npc.world_distance_blocks,
         npc_id,

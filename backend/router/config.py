@@ -1,10 +1,8 @@
-"""Configuration for deterministic direct scoring and tier capacities.
+"""Configuration for deterministic scoring, tier capacities and hysteresis.
 
 Owner: Elson & Daniel
 
-Graph propagation and hysteresis settings are intentionally deferred until those modules are
-implemented. Keeping this first configuration surface small makes the direct Router easy to
-explain and tune during the hackathon.
+Graph propagation settings are intentionally deferred until that module is implemented.
 """
 
 from __future__ import annotations
@@ -30,6 +28,11 @@ class RouterConfig:
     # Ambient unless it is the active conversation target.
     minimum_tier_score: float = 0.0
 
+    focused_hold_ms: int = 1800
+    reactive_hold_ms: int = 2500
+    focused_sticky_bonus: float = 0.18
+    reactive_sticky_bonus: float = 0.10
+
     def __post_init__(self) -> None:
         if self.focused_capacity < 0:
             raise ValueError("focused_capacity must be non-negative")
@@ -37,6 +40,10 @@ class RouterConfig:
             raise ValueError("reactive_capacity must be non-negative")
         if self.max_relevant_distance_blocks <= 0:
             raise ValueError("max_relevant_distance_blocks must be positive")
+        if self.focused_hold_ms < 0:
+            raise ValueError("focused_hold_ms must be non-negative")
+        if self.reactive_hold_ms < 0:
+            raise ValueError("reactive_hold_ms must be non-negative")
 
         non_negative = {
             "viewport_weight": self.viewport_weight,
@@ -45,6 +52,8 @@ class RouterConfig:
             "interaction_recency_weight": self.interaction_recency_weight,
             "active_conversation_bonus": self.active_conversation_bonus,
             "minimum_tier_score": self.minimum_tier_score,
+            "focused_sticky_bonus": self.focused_sticky_bonus,
+            "reactive_sticky_bonus": self.reactive_sticky_bonus,
         }
         for name, value in non_negative.items():
             if value < 0:
