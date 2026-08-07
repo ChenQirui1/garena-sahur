@@ -162,7 +162,7 @@ async def test_publication_expiry_returns_a_closed_conversation_to_idle(
         held.publisher.fail_next = 1_000
         await held.snapshot(active_conversation=active_conversation())
         await held.turn()
-        await held.provider.started_after(1)
+        await held.provider.wait_for_started(1)
 
         # Minecraft closes the conversation while the answer is still being generated.
         await held.snapshot(sequence=1843)

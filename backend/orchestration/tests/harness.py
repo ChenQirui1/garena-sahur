@@ -10,7 +10,7 @@ context, and publication are split up behind it. Passing here proves the owned p
 from __future__ import annotations
 
 from pathlib import Path
-from typing import Any, AsyncIterator
+from typing import Any, AsyncIterator, NamedTuple
 
 from asgi_lifespan import LifespanManager
 from httpx import ASGITransport, AsyncClient
@@ -24,6 +24,7 @@ from backend.ingestion.tests.canonical_messages import (
 )
 from backend.main import Adapters, Pipeline, create_app
 from backend.models.mock_provider import MockProvider
+from backend.models.model_gateway import Provider
 from backend.orchestration.behaviour_command import BehaviourCommand
 from backend.orchestration.conversation_manager import ConversationState
 from backend.orchestration.router_port import RouterPort, RoutingNpc, RoutingSnapshot
@@ -83,6 +84,33 @@ PROFILE_DOCUMENT = """
 """
 
 
+class DurableCounts(NamedTuple):
+    """How many rows each durable table holds, named so a moved count says which one moved.
+
+    A test that says what it expects table by table keeps saying it through a schema change
+    that preserves behaviour, and a failure names the table rather than a tuple position.
+    """
+
+    turns: int
+    events: int
+    commands: int
+    attempts: int
+    claims: int
+    sessions: int
+    threads: int
+
+
+_DURABLE_COUNTS = (
+    "SELECT (SELECT COUNT(*) FROM conversation_turns),"
+    " (SELECT COUNT(*) FROM game_events),"
+    " (SELECT COUNT(*) FROM behaviour_commands),"
+    " (SELECT COUNT(*) FROM provider_attempts),"
+    " (SELECT COUNT(*) FROM generation_claims),"
+    " (SELECT COUNT(*) FROM conversation_sessions),"
+    " (SELECT COUNT(*) FROM conversation_threads)"
+)
+
+
 class Harness:
     def __init__(
         self,
@@ -139,6 +167,10 @@ class Harness:
     def pending_generation_count(self) -> int:
         return self.pipeline.scheduler.pending_count
 
+    async def durable_counts(self) -> DurableCounts:
+        rows = await self.pipeline.store.connection.execute_fetchall(_DURABLE_COUNTS)
+        return DurableCounts(*(int(value) for value in list(rows)[0]))
+
     def state(self) -> ConversationState:
         return self.pipeline.intake.conversation.state(SESSION_ID)
 
@@ -181,19 +213,26 @@ async def running(
     gated: bool = False,
     publisher: RecordingPublisher | None = None,
     clock: ManualClock | None = None,
+    provider: Provider | None = None,
 ) -> AsyncIterator[Harness]:
     """Start the service. Passing a publisher or clock in is how a restart reuses them.
 
     A recovery test needs the second process to publish into the same recorder as the first,
     and to carry the same wall-clock reading, or a command's 15-second lifetime would look
     fresh again simply because a new `ManualClock` started at the same instant.
+
+    `provider` replaces the deterministic mock behind the same gate the mock runs behind, so a
+    test that needs a provider which fails or hangs injects it through the application's own
+    `Adapters` wiring rather than reaching into the gateway.
     """
     clock = clock or ManualClock()
     deadlines = ManualDeadlines(clock)
     publisher = publisher or RecordingPublisher()
     telemetry = RecordingTelemetry()
     router = router or RecordingRouter()
-    provider = GatedProvider(MockProvider(settings.characters_per_token), gated=gated)
+    gated_provider = GatedProvider(
+        provider or MockProvider(settings.characters_per_token), gated=gated
+    )
     app = create_app(
         settings,
         Adapters(
@@ -202,7 +241,7 @@ async def running(
             telemetry=telemetry,
             clock=clock,
             deadlines=deadlines,
-            provider=provider,
+            provider=gated_provider,
         ),
     )
     pipeline: Pipeline = app.state.pipeline
@@ -211,5 +250,5 @@ async def running(
         transport = ASGITransport(app=app)
         async with AsyncClient(transport=transport, base_url="http://backend") as client:
             yield Harness(
-                client, pipeline, publisher, telemetry, clock, deadlines, router, provider
+                client, pipeline, publisher, telemetry, clock, deadlines, router, gated_provider
             )

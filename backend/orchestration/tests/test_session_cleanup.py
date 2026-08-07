@@ -17,14 +17,21 @@ import pytest
 import pytest_asyncio
 
 from backend.ingestion.tests.canonical_messages import (
+    CONVERSATION_ID,
     SESSION_ID,
     SHOPKEEPER,
     active_conversation,
 )
+from backend.ingestion.turn_store import TurnStore
 from backend.orchestration.conversation_manager import ConversationState
 from backend.orchestration.observations import SESSION_CLEANED
 from backend.orchestration.tests.fakes import ManualClock, RecordingPublisher
-from backend.orchestration.tests.harness import Harness, running, settings_for
+from backend.orchestration.tests.harness import (
+    DurableCounts,
+    Harness,
+    running,
+    settings_for,
+)
 
 OTHER_SESSION = "demo-02"
 
@@ -37,19 +44,11 @@ NEIGHBOUR_SESSION = "demoX01-other"
 
 # What `seed` leaves behind: one turn, one event revision, and a command, a claim and an
 # attempt for each of the two triggers it fires — the event reaction and the player turn.
-SEEDED = (1, 1, 2, 2, 2, 1, 1)
-SEEDED_ROWS = sum(SEEDED)
-EMPTY = (0,) * len(SEEDED)
-
-COUNTS = (
-    "SELECT (SELECT COUNT(*) FROM conversation_turns),"
-    " (SELECT COUNT(*) FROM game_events),"
-    " (SELECT COUNT(*) FROM behaviour_commands),"
-    " (SELECT COUNT(*) FROM provider_attempts),"
-    " (SELECT COUNT(*) FROM generation_claims),"
-    " (SELECT COUNT(*) FROM conversation_sessions),"
-    " (SELECT COUNT(*) FROM conversation_threads)"
+SEEDED = DurableCounts(
+    turns=1, events=1, commands=2, attempts=2, claims=2, sessions=1, threads=1
 )
+SEEDED_ROWS = sum(SEEDED)
+EMPTY = DurableCounts(*(0,) * len(SEEDED))
 
 
 class CountingRouter:
@@ -64,11 +63,6 @@ class CountingRouter:
 
     def reset_session(self, session_id: str) -> None:
         self.reset.append(session_id)
-
-
-async def counts(harness: Harness) -> tuple[int, ...]:
-    rows = await harness.pipeline.store.connection.execute_fetchall(COUNTS)
-    return tuple(int(value) for value in list(rows)[0])
 
 
 @pytest_asyncio.fixture
@@ -89,7 +83,7 @@ async def test_a_finished_session_leaves_evidence_behind_until_it_is_cleaned(
 ) -> None:
     await seed(harness)
 
-    assert await counts(harness) == SEEDED
+    assert await harness.durable_counts() == SEEDED
 
 
 async def test_cleaning_a_session_removes_its_durable_state(harness: Harness) -> None:
@@ -101,7 +95,7 @@ async def test_cleaning_a_session_removes_its_durable_state(harness: Harness) ->
     assert response.status_code == 200
     assert response.json()["session_id"] == SESSION_ID
     assert response.json()["rows_removed"] == SEEDED_ROWS
-    assert await counts(harness) == EMPTY
+    assert await harness.durable_counts() == EMPTY
     assert harness.observed(SESSION_CLEANED)[0]["rows"] == SEEDED_ROWS
 
 
@@ -111,15 +105,17 @@ async def test_cleaning_one_session_leaves_another_untouched(harness: Harness) -
     await harness.turn(session_id=OTHER_SESSION, turn_id="turn-100", turn_index=0)
     await harness.settle()
 
-    before = await counts(harness)
+    before = await harness.durable_counts()
     await harness.client.delete(f"/sessions/{SESSION_ID}")
 
-    after = await counts(harness)
-    assert before[0] == 2 and after[0] == 1, "only the named session's turns are removed"
-    rows = await harness.pipeline.store.connection.execute_fetchall(
-        "SELECT session_id FROM conversation_turns"
-    )
-    assert [row[0] for row in rows] == [OTHER_SESSION]
+    after = await harness.durable_counts()
+    assert (before.turns, after.turns) == (2, 1), "only the named session's turns are removed"
+    turns = TurnStore(harness.pipeline.store)
+    assert await turns.recent(SESSION_ID, CONVERSATION_ID, limit=10) == ()
+    assert [
+        one.session_id
+        for one in await turns.recent(OTHER_SESSION, CONVERSATION_ID, limit=10)
+    ] == [OTHER_SESSION]
 
 
 async def test_cleaning_forgets_the_in_memory_state_as_well(harness: Harness) -> None:
@@ -164,6 +160,11 @@ async def test_a_cleaned_session_can_generate_for_the_same_turn_again(
 
 
 async def claimed_sessions(harness: Harness) -> list[str]:
+    """Which sessions still hold a durable claim.
+
+    `GenerationClaims` takes claims and never reports them, so there is no public reader to go
+    through here. Naming the sessions keeps the assertion about which claim was released.
+    """
     rows = await harness.pipeline.store.connection.execute_fetchall(
         "SELECT session_id FROM generation_claims ORDER BY session_id"
     )
@@ -199,10 +200,10 @@ async def test_restarting_without_cleanup_keeps_everything(tmp_path: Path) -> No
 
     async for first in running(settings, publisher=publisher, clock=clock):
         await seed(first)
-        before = await counts(first)
+        before = await first.durable_counts()
 
     async for second in running(settings, publisher=publisher, clock=clock):
-        after = await counts(second)
+        after = await second.durable_counts()
 
     assert before == SEEDED
     assert after == before, "a restart must not delete durable evidence"
@@ -217,4 +218,4 @@ async def test_cleaning_an_unknown_session_removes_nothing_and_does_not_fail(
 
     assert response.status_code == 200
     assert response.json()["rows_removed"] == 0
-    assert await counts(harness) == SEEDED
+    assert await harness.durable_counts() == SEEDED
