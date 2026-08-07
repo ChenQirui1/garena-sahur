@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from backend.context.conversation_history import ConversationHistory
 from backend.context.event_context import ActiveEvents, describe_event
 from backend.context.npc_profiles import NpcProfile, NpcProfiles
+from backend.context.trigger_kind import TriggerKind
 from backend.ingestion.message_validation import (
     ConversationTurn,
     GameEvent,
@@ -55,6 +56,7 @@ class ContextSection:
 @dataclass(frozen=True, slots=True)
 class GenerationContext:
     tier: AttentionTier
+    trigger_kind: TriggerKind
     npc: NpcProfile
     trigger_text: str
     sections: tuple[ContextSection, ...]
@@ -109,6 +111,7 @@ class ContextBuilder:
         )
         return GenerationContext(
             tier=tier,
+            trigger_kind=TriggerKind.PLAYER_SPEECH,
             npc=profile,
             trigger_text=turn.text,
             sections=sections,
@@ -147,6 +150,7 @@ class ContextBuilder:
         )
         return GenerationContext(
             tier=tier,
+            trigger_kind=TriggerKind.OBSERVED_EVENT,
             npc=profile,
             trigger_text=trigger_text,
             sections=sections,

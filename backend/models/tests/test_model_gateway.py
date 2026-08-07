@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import pytest
 
+from backend.context.trigger_kind import TriggerKind
 from backend.models.mock_provider import MODEL_FOR_TIER, PROVIDER, MockProvider
 from backend.models.model_gateway import (
     EmptyGeneration,
@@ -29,6 +30,7 @@ def request_for(tier: AttentionTier, **overrides: object) -> GenerationRequest:
         "npc_id": "shopkeeper-uuid",
         "npc_name": "Mira",
         "tier": tier,
+        "trigger_kind": TriggerKind.PLAYER_SPEECH,
         "conversation_id": "conversation-07",
         "turn_id": "turn-004",
         "event_id": None,

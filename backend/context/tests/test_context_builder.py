@@ -20,6 +20,7 @@ from backend.context.context_builder import (
     ContextLimits,
     GenerationContext,
 )
+from backend.context.trigger_kind import TriggerKind
 from backend.context.conversation_history import ConversationHistory
 from backend.context.event_context import ActiveEvents, describe_event
 from backend.context.npc_profiles import NpcProfiles
@@ -387,3 +388,28 @@ async def test_a_departed_bystander_is_near_nothing_rather_than_near_everything(
     context = await parts.builder.build(AttentionTier.FOCUSED, TRIGGERING_TURN, departed)
 
     assert EVENT not in {section.name for section in context.sections}
+
+
+async def test_the_two_paths_mark_which_of_them_built_the_context(parts: Parts) -> None:
+    """The trigger kind is set by the path, so a renderer never has to guess from the text."""
+    answering = await parts.builder.build(AttentionTier.FOCUSED, TRIGGERING_TURN, SNAPSHOT)
+    reacting = await parts.builder.build_for_event(
+        AttentionTier.FOCUSED, THEFT, SHOPKEEPER, (ROLE_TARGET,), SNAPSHOT
+    )
+
+    assert answering.trigger_kind is TriggerKind.PLAYER_SPEECH
+    assert reacting.trigger_kind is TriggerKind.OBSERVED_EVENT
+
+
+async def test_a_reaction_carries_the_event_as_its_trigger_and_not_as_a_separate_section(
+    parts: Parts,
+) -> None:
+    """One event, one slot. Two would compete for the same prompt heading."""
+    await parts.activate(THEFT, frozenset({SHOPKEEPER}))
+
+    context = await parts.builder.build_for_event(
+        AttentionTier.FOCUSED, THEFT, SHOPKEEPER, (ROLE_TARGET,), SNAPSHOT
+    )
+
+    assert EVENT not in {section.name for section in context.sections}
+    assert _body(context, TRIGGER) == describe_event(THEFT, (ROLE_TARGET,))

@@ -10,6 +10,7 @@ manufacture a command Minecraft cannot apply.
 
 from __future__ import annotations
 
+from backend.context.trigger_kind import TriggerKind
 from backend.models.model_gateway import (
     GeneratedBehaviour,
     GenerationRequest,
@@ -46,12 +47,22 @@ class MockProvider:
 
 
 def _dialogue(request: GenerationRequest) -> str:
-    if request.tier is AttentionTier.FOCUSED:
+    """Focused wording repeats the trigger back, so it has to know whose words those are.
+
+    Saying "you asked" about an observed event puts a line in the player's mouth that the
+    player never spoke, which is the one thing a rehearsal transcript must not do.
+    """
+    if request.tier is not AttentionTier.FOCUSED:
+        return f'{request.npc_name} calls out. "{request.trigger_text}"'
+    if request.trigger_kind is TriggerKind.OBSERVED_EVENT:
         return (
-            f'{request.npc_name} leans in. "You asked: {request.trigger_text} '
-            'Let me tell you what I saw."'
+            f'{request.npc_name} looks up. "{request.trigger_text} '
+            'Let me see it for myself."'
         )
-    return f'{request.npc_name} calls out. "{request.trigger_text}"'
+    return (
+        f'{request.npc_name} leans in. "You asked: {request.trigger_text} '
+        'Let me tell you what I saw."'
+    )
 
 
 def _clipped(dialogue: str, request: GenerationRequest, characters_per_token: int) -> str:
