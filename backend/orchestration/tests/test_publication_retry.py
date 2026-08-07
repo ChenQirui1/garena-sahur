@@ -123,6 +123,7 @@ async def test_every_attempt_sends_byte_identical_content(harness: Harness) -> N
         if len(sent) < 3:
             raise RuntimeError("refused")
 
+    # Replacing the bound method is the point: the publisher fails twice, then succeeds.
     harness.publisher.publish = record_then_fail  # type: ignore[method-assign]
 
     await harness.snapshot(active_conversation=active_conversation())

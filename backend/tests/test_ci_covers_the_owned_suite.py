@@ -144,6 +144,12 @@ def test_neither_tool_is_run_by_naming_directories_in_the_workflow() -> None:
         )
 
 
+def type_checked_paths() -> set[str]:
+    parsed = configparser.ConfigParser()
+    parsed.read(MYPY_INI)
+    return {path.strip() for path in parsed["mypy"]["files"].split(",")}
+
+
 def test_the_type_check_covers_what_the_suite_covers() -> None:
     """A gate over a narrower scope than the suite is a gate with a hole in it.
 
@@ -151,9 +157,7 @@ def test_the_type_check_covers_what_the_suite_covers() -> None:
     list here, so the two configurations cannot drift apart quietly. mypy legitimately covers
     more — the production modules a test imports — and only a shortfall is a finding.
     """
-    parsed = configparser.ConfigParser()
-    parsed.read(MYPY_INI)
-    checked = {path.strip() for path in parsed["mypy"]["files"].split(",")}
+    checked = type_checked_paths()
 
     uncovered = [
         path
@@ -165,3 +169,36 @@ def test_the_type_check_covers_what_the_suite_covers() -> None:
         f"pytest collects {uncovered} and mypy does not check it, so a type regression there "
         f"would pass the hosted run. mypy checks: {sorted(checked)}"
     )
+
+
+def test_the_type_check_covers_every_owned_script() -> None:
+    """Naming our scripts one by one is only safe if something notices the next one."""
+    checked = type_checked_paths()
+
+    unchecked = sorted(
+        str(script.relative_to(REPO_ROOT))
+        for script in owned_scripts()
+        if str(script.relative_to(REPO_ROOT)) not in checked
+    )
+
+    assert unchecked == [], f"owned scripts mypy does not check: {unchecked}"
+
+
+def test_the_type_check_reaches_no_path_another_owner_holds() -> None:
+    """The counterpart of the paths-filter case, and the reason `scripts` is not named whole.
+
+    A bare `scripts` swept in `run_benchmark.py` and `generate_charts.py`. Both are scaffolds
+    today, so it was green; filled in, they would fail a check on a pull request that never
+    touched them and that we could not fix without crossing an ownership boundary.
+    """
+    ours = {str(script.relative_to(REPO_ROOT)) for script in owned_scripts()}
+
+    theirs = sorted(
+        path
+        for path in type_checked_paths()
+        for candidate in [(REPO_ROOT / path)]
+        if path in {"backend/router", "backend/telemetry", "tests", "scripts"}
+        or (candidate.is_file() and path.startswith("scripts/") and path not in ours)
+    )
+
+    assert theirs == [], f"mypy is checking paths another owner holds: {theirs}"

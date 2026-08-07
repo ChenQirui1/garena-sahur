@@ -37,9 +37,9 @@ from backend.orchestration.tests.harness import Harness, running, settings_for
 
 def counted(fact: dict[str, object], name: str) -> int:
     """One token count off a telemetry record, which carries `object` values by contract."""
-    counted = fact[name]
-    assert isinstance(counted, int), f"{name} is {counted!r}, not a count"
-    return counted
+    reported = fact[name]
+    assert isinstance(reported, int), f"{name} is {reported!r}, not a count"
+    return reported
 
 
 @pytest_asyncio.fixture
