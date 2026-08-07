@@ -29,6 +29,7 @@ from backend.orchestration.conversation_manager import ConversationState
 from backend.orchestration.generation_policy import NOTHING_TO_SPEAK_ABOUT
 from backend.orchestration.observations import (
     GENERATION_SUPPRESSED,
+    ROUTING_RESULT_REJECTED,
     TRIGGER_SUPPRESSED,
     WORK_CANCELLED,
     WORK_FAILED,
@@ -38,6 +39,7 @@ from backend.orchestration.router_port import AttentionTier
 from backend.orchestration.tests.fake_routers import (
     EventAwareRouter,
     FlakyRouter,
+    OmittingRouter,
     StatefulRouter,
     TierScriptRouter,
 )
@@ -277,6 +279,49 @@ async def test_a_router_failure_does_not_cancel_work_already_queued(
         harness.provider.release_all()
         await harness.settle()
 
+    assert len(harness.published_for(queued)) == 1
+
+
+async def test_a_result_that_omits_a_candidate_does_not_cancel_its_queued_work(
+    tmp_path: Path,
+) -> None:
+    """An omitted candidate is a Router defect, and it must not read as a demotion.
+
+    The omission leaves an internally consistent result, so before it was rejected the NPC was
+    simply absent from the assignments — indistinguishable downstream from having been demoted
+    out of a generating tier, and its queued line was cancelled for that reason.
+    """
+    inner = TierScriptRouter({SHOPKEEPER: REACTIVE, THIEF: REACTIVE})
+    router = OmittingRouter(inner)
+    async for harness in running(
+        settings_for(tmp_path, focused_concurrency=1, reactive_concurrency=1, total_concurrency=1),
+        router=router,
+        gated=True,
+    ):
+        await harness.snapshot(sequence=1)
+        await harness.settle_routing()
+
+        await harness.event(actor_npc_ids=[THIEF], target_npc_ids=[SHOPKEEPER])
+        await harness.provider.started_after(1)
+        queued = THIEF if harness.provider.started[0].npc_id == SHOPKEEPER else SHOPKEEPER
+        assert harness.pending_generation_count() == 1
+
+        router.omitted = queued
+        await harness.snapshot(sequence=2)
+        await harness.settle_routing()
+        assert harness.observed(WORK_CANCELLED) == []
+        assert harness.pending_generation_count() == 1
+
+        router.omitted = None
+        await harness.snapshot(sequence=3)
+        await harness.settle_routing()
+        harness.provider.release_all()
+        await harness.settle()
+
+    # The defect is recorded as its own thing, not as the NPC losing a generating tier.
+    rejected = harness.observed(ROUTING_RESULT_REJECTED)
+    assert [one["sequence"] for one in rejected] == [2]
+    assert queued in str(rejected[0]["reason"])
     assert len(harness.published_for(queued)) == 1
 
 

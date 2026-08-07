@@ -12,6 +12,7 @@ import pytest
 import pytest_asyncio
 from pydantic import ValidationError
 
+from backend.orchestration.observations import ROUTING_RESULT_REJECTED, Observations
 from backend.orchestration.router_handoff import (
     RouterHandoff,
     RoutingOutcome,
@@ -31,10 +32,12 @@ from backend.orchestration.router_port import (
     TierCounts,
 )
 from backend.orchestration.tests.fake_routers import (
+    OmittingRouter,
     RaisingRouter,
     RecordingRouter,
     ScriptedRouter,
     StatefulRouter,
+    TierScriptRouter,
     result_for,
 )
 
@@ -124,10 +127,14 @@ def test_the_router_never_receives_a_signal_outside_its_documented_range(
         RoutingNpc(**(inside_range | out_of_range))
 
 
+def handoff_for(router: object, observations: Observations | None = None) -> RouterHandoff:
+    return RouterHandoff(router, observations or Observations())  # type: ignore[arg-type]
+
+
 @pytest_asyncio.fixture
 async def running_handoff() -> AsyncIterator[tuple[RouterHandoff, RecordingRouter]]:
     router = RecordingRouter()
-    handoff = RouterHandoff(router)
+    handoff = handoff_for(router)
     await handoff.start()
     try:
         yield handoff, router
@@ -142,7 +149,7 @@ async def route(handoff: RouterHandoff, *snapshots: RoutingSnapshot) -> None:
 
 
 async def routed_by(router: object, snapshot: RoutingSnapshot) -> RoutingStatus:
-    handoff = RouterHandoff(router)  # type: ignore[arg-type]
+    handoff = handoff_for(router)
     await handoff.start()
     try:
         await route(handoff, snapshot)
@@ -199,7 +206,7 @@ async def test_pending_snapshot_work_is_coalesced_to_the_newest_sequence(
 
 
 async def test_a_router_exception_fails_closed_and_is_observable() -> None:
-    handoff = RouterHandoff(RaisingRouter(RuntimeError("router exploded")))
+    handoff = handoff_for(RaisingRouter(RuntimeError("router exploded")))
     await handoff.start()
     try:
         await route(handoff, routing_snapshot(1))
@@ -259,6 +266,86 @@ async def test_an_invalid_router_result_fails_closed_without_inventing_tiers(
     assert await routed_by(router, snapshot) is RoutingStatus.INVALID_RESULT
 
 
+async def test_a_result_that_omits_a_candidate_fails_closed() -> None:
+    """`docs/message_schemas.md` §5: every candidate appears exactly once.
+
+    The omission is only visible against the routed snapshot — the result is internally
+    consistent — so accepting it would let a Router defect become an ordinary routing outcome.
+    """
+    snapshot = routing_snapshot(1842, npc_ids=(SHOPKEEPER, THIEF))
+    router = OmittingRouter(TierScriptRouter(), omitted=THIEF)
+    handoff = handoff_for(router)
+
+    outcome = await handoff.route_now(snapshot)
+
+    assert outcome.status is RoutingStatus.INVALID_RESULT
+    assert outcome.assignments == ()
+    assert outcome.failure_reason is not None
+    assert THIEF in outcome.failure_reason
+    # The shopkeeper was assigned and is not what is wrong with this result.
+    assert SHOPKEEPER not in outcome.failure_reason
+
+
+async def test_a_result_that_assigns_every_candidate_is_routed() -> None:
+    """The opposite of the rule above, so completeness cannot pass by rejecting everything."""
+    snapshot = routing_snapshot(1842, npc_ids=(SHOPKEEPER, THIEF))
+    handoff = handoff_for(OmittingRouter(TierScriptRouter()))
+
+    outcome = await handoff.route_now(snapshot)
+
+    assert outcome.status is RoutingStatus.ROUTED
+    assert {one.npc_id for one in outcome.assignments} == {SHOPKEEPER, THIEF}
+
+
+async def test_a_result_whose_timestamp_does_not_correspond_fails_closed() -> None:
+    """`docs/message_schemas.md` §5: session, world, sequence and timestamp correspond.
+
+    The sequence still matches, so nothing else in the check can catch this one.
+    """
+    snapshot = routing_snapshot(1842)
+    result = result_for(
+        snapshot, (assignment(SHOPKEEPER),), timestamp_ms=TIMESTAMP_MS + 1
+    )
+    handoff = handoff_for(ScriptedRouter(result))
+
+    outcome = await handoff.route_now(snapshot)
+
+    assert outcome.status is RoutingStatus.INVALID_RESULT
+    assert outcome.assignments == ()
+    assert outcome.failure_reason == (
+        f"result carries timestamp_ms {TIMESTAMP_MS + 1}, not {TIMESTAMP_MS}"
+    )
+
+
+async def test_a_rejected_result_is_observed_apart_from_a_demotion() -> None:
+    """A Router defect and a demotion are the same downstream silence without this.
+
+    The coordinator cancels queued work for an NPC absent from the assignments under a demotion
+    reason, so the rejection has to say for itself that no assignment was ever produced.
+    """
+    snapshot = routing_snapshot(1842, npc_ids=(SHOPKEEPER, THIEF))
+    observations = Observations()
+    handoff = handoff_for(OmittingRouter(TierScriptRouter(), omitted=THIEF), observations)
+
+    outcome = await handoff.route_now(snapshot)
+
+    rejected = [one for one in observations.recorded if one.name == ROUTING_RESULT_REJECTED]
+    assert [one.fields["status"] for one in rejected] == [RoutingStatus.INVALID_RESULT]
+    assert rejected[0].fields["reason"] == outcome.failure_reason
+    assert rejected[0].fields["sequence"] == 1842
+    assert rejected[0].fields["session_id"] == SESSION_ID
+
+
+async def test_a_routed_result_is_not_observed_as_rejected() -> None:
+    snapshot = routing_snapshot(1842)
+    observations = Observations()
+    handoff = handoff_for(RecordingRouter(), observations)
+
+    await handoff.route_now(snapshot)
+
+    assert [one for one in observations.recorded if one.name == ROUTING_RESULT_REJECTED] == []
+
+
 class Listener:
     """Stands in for the coordinator's routing listener, which promotion and expiry hang off."""
 
@@ -270,7 +357,7 @@ class Listener:
 
 
 async def test_a_trigger_routing_outcome_reaches_the_listener_like_any_other() -> None:
-    handoff = RouterHandoff(StatefulRouter({SHOPKEEPER: AttentionTier.FOCUSED}))
+    handoff = handoff_for(StatefulRouter({SHOPKEEPER: AttentionTier.FOCUSED}))
     listener = Listener()
     handoff.listen(listener)
 
@@ -283,7 +370,7 @@ async def test_a_trigger_routing_outcome_reaches_the_listener_like_any_other() -
 async def test_a_snapshot_superseded_during_enrichment_never_reaches_the_router() -> None:
     """The trigger loses the race, so it reads the newer outcome instead of failing closed."""
     router = StatefulRouter({SHOPKEEPER: AttentionTier.FOCUSED})
-    handoff = RouterHandoff(router)
+    handoff = handoff_for(router)
     await handoff.start()
     try:
         await route(handoff, routing_snapshot(8, target_npc_id=SHOPKEEPER))
@@ -298,7 +385,7 @@ async def test_a_snapshot_superseded_during_enrichment_never_reaches_the_router(
 
 async def test_a_superseded_trigger_does_not_re_notify_the_listener() -> None:
     """Nothing was routed, so there is no new outcome for promotion or expiry to read."""
-    handoff = RouterHandoff(StatefulRouter({SHOPKEEPER: AttentionTier.FOCUSED}))
+    handoff = handoff_for(StatefulRouter({SHOPKEEPER: AttentionTier.FOCUSED}))
     listener = Listener()
     handoff.listen(listener)
     await handoff.start()
@@ -314,7 +401,7 @@ async def test_a_superseded_trigger_does_not_re_notify_the_listener() -> None:
 async def test_a_newer_pending_snapshot_survives_a_trigger_routing() -> None:
     """Routing a trigger discards only what it overtook, so nothing waiting goes unobserved."""
     router = StatefulRouter({SHOPKEEPER: AttentionTier.FOCUSED})
-    handoff = RouterHandoff(router)
+    handoff = handoff_for(router)
     listener = Listener()
     handoff.listen(listener)
     await handoff.start()
@@ -332,7 +419,7 @@ async def test_a_newer_pending_snapshot_survives_a_trigger_routing() -> None:
 async def test_a_pending_snapshot_the_trigger_overtook_is_never_routed() -> None:
     """Routing it would hand the Router an older sequence and fail the session closed."""
     router = StatefulRouter({SHOPKEEPER: AttentionTier.FOCUSED})
-    handoff = RouterHandoff(router)
+    handoff = handoff_for(router)
     await handoff.start()
     try:
         handoff.submit(routing_snapshot(5, target_npc_id=SHOPKEEPER))
@@ -347,7 +434,7 @@ async def test_a_pending_snapshot_the_trigger_overtook_is_never_routed() -> None
 
 async def test_a_router_failure_on_the_trigger_path_still_fails_closed() -> None:
     """Supersession is not the only reason a trigger produces nothing; a failure still shows."""
-    handoff = RouterHandoff(RaisingRouter(RuntimeError("router exploded")))
+    handoff = handoff_for(RaisingRouter(RuntimeError("router exploded")))
 
     outcome = await handoff.route_now(routing_snapshot(1842, target_npc_id=SHOPKEEPER))
 
@@ -359,7 +446,7 @@ async def test_a_router_failure_on_the_trigger_path_still_fails_closed() -> None
 async def test_a_reset_session_lets_the_next_snapshot_route_from_scratch() -> None:
     """Sequence memory is per session, so a restarted session is not permanently superseded."""
     router = StatefulRouter({SHOPKEEPER: AttentionTier.FOCUSED})
-    handoff = RouterHandoff(router)
+    handoff = handoff_for(router)
 
     await handoff.route_now(routing_snapshot(8, target_npc_id=SHOPKEEPER))
     handoff.reset_session(SESSION_ID)
@@ -371,7 +458,7 @@ async def test_a_reset_session_lets_the_next_snapshot_route_from_scratch() -> No
 
 
 async def test_a_stopped_handoff_reports_that_it_is_not_running() -> None:
-    handoff = RouterHandoff(RecordingRouter())
+    handoff = handoff_for(RecordingRouter())
     assert handoff.is_running is False
 
     await handoff.start()
@@ -438,7 +525,7 @@ async def test_a_result_carrying_the_documented_scores_counts_and_diagnostics_is
         counts=TierCounts(**documented["counts"]),
         diagnostics=RoutingDiagnostics(**documented["diagnostics"]),
     )
-    handoff = RouterHandoff(ScriptedRouter(result))
+    handoff = handoff_for(ScriptedRouter(result))
 
     outcome = await handoff.route_now(snapshot)
 
@@ -454,7 +541,7 @@ async def test_a_result_carrying_the_documented_scores_counts_and_diagnostics_is
 
 async def test_a_router_that_sends_none_of_the_optional_fields_is_still_routed() -> None:
     """Today's Router populates none of them; the absence is visible, not treated as valid."""
-    handoff = RouterHandoff(RecordingRouter())
+    handoff = handoff_for(RecordingRouter())
 
     outcome = await handoff.route_now(routing_snapshot(1842, target_npc_id=SHOPKEEPER))
 
@@ -474,7 +561,7 @@ async def test_counts_at_capacity_are_accepted_because_the_limit_is_a_maximum() 
         counts=TierCounts(focused=2, reactive=0, ambient=0),
         diagnostics=diagnostics(focused_capacity=2),
     )
-    handoff = RouterHandoff(ScriptedRouter(result))
+    handoff = handoff_for(ScriptedRouter(result))
 
     assert (await handoff.route_now(snapshot)).status is RoutingStatus.ROUTED
 
@@ -539,7 +626,7 @@ async def test_a_result_that_breaks_a_documented_invariant_fails_closed(
 ) -> None:
     snapshot = routing_snapshot(1842, npc_ids=(SHOPKEEPER, THIEF))
     router = ScriptedRouter(make_result(snapshot))  # type: ignore[operator]
-    handoff = RouterHandoff(router)
+    handoff = handoff_for(router)
 
     outcome = await handoff.route_now(snapshot)
 

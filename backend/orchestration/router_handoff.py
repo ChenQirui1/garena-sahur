@@ -12,6 +12,7 @@ from dataclasses import dataclass
 from enum import StrEnum
 from typing import Awaitable, Callable
 
+from backend.orchestration.observations import ROUTING_RESULT_REJECTED, Observations
 from backend.orchestration.router_port import (
     RESULT_SCHEMA_VERSION,
     RESULT_TYPE,
@@ -56,8 +57,9 @@ class RoutingOutcome:
 class RouterHandoff:
     """Route the newest pending snapshot per session and world, one call at a time."""
 
-    def __init__(self, router: RouterPort) -> None:
+    def __init__(self, router: RouterPort, observations: Observations) -> None:
         self._router = router
+        self._observations = observations
         self._pending: dict[tuple[str, str], RoutingSnapshot] = {}
         self._outcomes: dict[tuple[str, str], RoutingOutcome] = {}
         self._routed_sequences: dict[tuple[str, str], int] = {}
@@ -235,10 +237,23 @@ class RouterHandoff:
             diagnostics=result.diagnostics,
         )
 
-    @staticmethod
     def _failed(
-        snapshot: RoutingSnapshot, status: RoutingStatus, reason: str
+        self, snapshot: RoutingSnapshot, status: RoutingStatus, reason: str
     ) -> RoutingOutcome:
+        """Produce no assignment, and say so where a demotion cannot be mistaken for it.
+
+        Downstream, an NPC absent from a routed result has its queued work cancelled as a
+        demotion. A result that never became assignments must therefore be visible as its own
+        thing, or a Router defect and a deliberate demotion are the same silence.
+        """
+        self._observations.note(
+            ROUTING_RESULT_REJECTED,
+            session_id=snapshot.session_id,
+            world_id=snapshot.world_id,
+            sequence=snapshot.sequence,
+            status=status,
+            reason=reason,
+        )
         return RoutingOutcome(
             session_id=snapshot.session_id,
             world_id=snapshot.world_id,
@@ -258,6 +273,10 @@ def _reject_reason(result: object, snapshot: RoutingSnapshot) -> str | None:
         return f"unexpected result_type {result.result_type!r}"
     if (result.session_id, result.world_id) != (snapshot.session_id, snapshot.world_id):
         return "result answers another session or world"
+    if result.timestamp_ms != snapshot.timestamp_ms:
+        return (
+            f"result carries timestamp_ms {result.timestamp_ms}, not {snapshot.timestamp_ms}"
+        )
     if not isinstance(result.assignments, (list, tuple)):
         return "assignments is not a sequence"
 
@@ -273,6 +292,10 @@ def _reject_reason(result: object, snapshot: RoutingSnapshot) -> str | None:
         if assignment.npc_id in assigned:
             return f"{assignment.npc_id} was assigned more than once"
         assigned.add(assignment.npc_id)
+
+    omitted = candidate_ids - assigned
+    if omitted:
+        return f"no tier was assigned for {', '.join(sorted(omitted))}"
 
     return _reject_reported_totals_reason(result)
 
