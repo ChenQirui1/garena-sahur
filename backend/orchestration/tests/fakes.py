@@ -27,26 +27,6 @@ from backend.orchestration.router_port import AttentionTier
 from backend.orchestration.telemetry_port import ModelCallFact
 
 
-class Arrivals:
-    """Await the nth time something happened, rather than a delay long enough to hope it has.
-
-    The count itself stays with whoever records it, so there is one source of truth for how
-    many arrived and this only carries the waiting.
-    """
-
-    def __init__(self, counted: Callable[[], int]) -> None:
-        self._counted = counted
-        self._arrived = asyncio.Event()
-
-    def record(self) -> None:
-        self._arrived.set()
-
-    async def wait_for(self, expected: int) -> None:
-        while self._counted() < expected:
-            self._arrived.clear()
-            await self._arrived.wait()
-
-
 class ManualClock:
     """A clock that only moves when a test moves it.
 
@@ -142,14 +122,13 @@ class RecordingPublisher:
     def __init__(self, commands: CommandStore | None = None) -> None:
         self.published: list[BehaviourCommand] = []
         self.sent_bytes: list[str] = []
-        self.attempted_bytes: list[str] = []
         self.stored_when_published: list[BehaviourCommand | None] = []
         self.on_publish: Callable[[], None] | None = None
         self.fail_next = 0
         self.attempts = 0
         self._commands = commands
         self._gate: asyncio.Event | None = None
-        self._attempted = Arrivals(lambda: self.attempts)
+        self._attempted = asyncio.Event()
 
     def bind(self, commands: CommandStore) -> None:
         self._commands = commands
@@ -165,12 +144,13 @@ class RecordingPublisher:
 
     async def wait_for_attempt(self, expected: int) -> None:
         """Return once ``expected`` publications have been attempted."""
-        await self._attempted.wait_for(expected)
+        while self.attempts < expected:
+            self._attempted.clear()
+            await self._attempted.wait()
 
     async def publish(self, command: StoredCommand) -> None:
         self.attempts += 1
-        self.attempted_bytes.append(command.serialized)
-        self._attempted.record()
+        self._attempted.set()
         gate = self._gate
         if gate is not None:
             await gate.wait()
@@ -199,7 +179,7 @@ class GatedProvider:
         self._gate: asyncio.Event | None = None
         self._in_flight: list[GenerationRequest] = []
         self.started: list[GenerationRequest] = []
-        self._started = Arrivals(lambda: len(self.started))
+        self._started = asyncio.Event()
         self.peak_in_flight = 0
         self._peak_by_tier: Counter[AttentionTier] = Counter()
         self._peak_by_npc: Counter[str] = Counter()
@@ -232,11 +212,13 @@ class GatedProvider:
         nothing. Where a test needs a slot to free before it can claim the count settled, it
         releases the gate and drains rather than waiting out a tick.
         """
-        await self._started.wait_for(expected)
+        while len(self.started) < expected:
+            self._started.clear()
+            await self._started.wait()
 
     async def generate(self, request: GenerationRequest) -> GeneratedBehaviour:
         self.started.append(request)
-        self._started.record()
+        self._started.set()
         self._in_flight.append(request)
         self._record_peaks()
         gate = self._gate

@@ -25,8 +25,6 @@ from backend.ingestion.tests.canonical_messages import (
 from backend.ingestion.turn_store import TurnStore
 from backend.orchestration.conversation_manager import ConversationState
 from backend.orchestration.observations import SESSION_CLEANED
-from backend.orchestration.router_port import RouterPort, RoutingResult, RoutingSnapshot
-from backend.orchestration.tests.fake_routers import RecordingRouter
 from backend.orchestration.tests.fakes import ManualClock, RecordingPublisher
 from backend.orchestration.tests.harness import (
     DurableCounts,
@@ -56,12 +54,12 @@ EMPTY = DurableCounts(*(0,) * len(SEEDED))
 class CountingRouter:
     """Records which sessions the Router was told to forget."""
 
-    def __init__(self, inner: RouterPort) -> None:
+    def __init__(self, inner: object) -> None:
         self._inner = inner
         self.reset: list[str] = []
 
-    def route(self, snapshot: RoutingSnapshot) -> RoutingResult:
-        return self._inner.route(snapshot)
+    def route(self, snapshot: object) -> object:
+        return self._inner.route(snapshot)  # type: ignore[attr-defined]
 
     def reset_session(self, session_id: str) -> None:
         self.reset.append(session_id)
@@ -132,8 +130,10 @@ async def test_cleaning_forgets_the_in_memory_state_as_well(harness: Harness) ->
 
 async def test_cleaning_resets_the_router_for_that_session_only(tmp_path: Path) -> None:
     """Router hysteresis and previous tiers must not outlive the session they describe."""
+    from backend.orchestration.tests.fake_routers import RecordingRouter
+
     router = CountingRouter(RecordingRouter())
-    async for started in running(settings_for(tmp_path), router):
+    async for started in running(settings_for(tmp_path), router):  # type: ignore[arg-type]
         await started.snapshot(active_conversation=active_conversation())
         await started.settle()
 

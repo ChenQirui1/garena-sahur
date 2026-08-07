@@ -115,14 +115,21 @@ async def test_retries_stop_once_the_command_can_no_longer_be_accepted(
 
 
 async def test_every_attempt_sends_byte_identical_content(harness: Harness) -> None:
-    # The publisher refuses twice and then accepts, so three attempts carry the same command.
-    harness.publisher.fail_next = 2
+    harness.publisher.fail_next = 0
+    sent: list[str] = []
+
+    async def record_then_fail(command: object) -> None:
+        sent.append(command.serialized)  # type: ignore[attr-defined]
+        if len(sent) < 3:
+            raise RuntimeError("refused")
+
+    # Replacing the bound method is the point: the publisher fails twice, then succeeds.
+    harness.publisher.publish = record_then_fail  # type: ignore[method-assign]
 
     await harness.snapshot(active_conversation=active_conversation())
     await harness.turn()
     await harness.settle()
 
-    sent = harness.publisher.attempted_bytes
     assert len(sent) == 3
     assert len(set(sent)) == 1, "a retry must reuse the identical serialized command"
 
