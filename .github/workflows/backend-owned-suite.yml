@@ -1,0 +1,70 @@
+# Runs the Jerome & Richard backend suite. Owner: Jerome & Richard.
+#
+# Bare `pytest` is deliberate: `pytest.ini` decides collection, and its `testpaths` names only the
+# Jerome & Richard packages. Naming directories here instead would let this file and that one
+# disagree, and would eventually sweep in `backend/router/tests` (Elson & Daniel, still
+# scaffolding) or the jointly owned `tests/test_end_to_end.py` — making a green tick claim
+# coverage the team does not have.
+#
+# The two `paths` lists are duplicated rather than shared through a YAML anchor because GitHub
+# Actions does not support anchors or aliases. Keep them in step.
+#
+# That filter is also why this check must not be marked required in branch protection: a skipped
+# check reports no status at all, and a required check that never reports leaves the pull request
+# waiting for a status that will never arrive. Required and path-filtered are mutually exclusive —
+# if the team wants this required later, the filter comes out in the same change. See issue #44.
+#
+# mypy is not run here. It has no configuration in this repository and a standing 20-error
+# baseline, so gating on it would mean a red check from the first run.
+
+name: Jerome & Richard backend suite
+
+on:
+  pull_request:
+    paths:
+      - 'backend/main.py'
+      - 'backend/config.py'
+      - 'backend/ingestion/**'
+      - 'backend/orchestration/**'
+      - 'backend/context/**'
+      - 'backend/models/**'
+      - 'pytest.ini'
+      - 'requirements.txt'
+      - '.github/workflows/backend-owned-suite.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'backend/main.py'
+      - 'backend/config.py'
+      - 'backend/ingestion/**'
+      - 'backend/orchestration/**'
+      - 'backend/context/**'
+      - 'backend/models/**'
+      - 'pytest.ini'
+      - 'requirements.txt'
+      - '.github/workflows/backend-owned-suite.yml'
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ${{ github.workflow }}-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  jerome-richard-backend-suite:
+    name: Jerome & Richard backend suite
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-python@v5
+        with:
+          # The version `requirements.txt` names.
+          python-version: '3.12'
+          cache: pip
+
+      - run: pip install -r requirements.txt
+
+      - run: python -m pytest
