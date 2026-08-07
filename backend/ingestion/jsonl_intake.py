@@ -12,9 +12,16 @@ from pathlib import Path
 from typing import Any, Iterable
 
 from backend.ingestion.intake_service import IntakeOutcome, IntakeResult, IntakeService
+from backend.ingestion.message_validation import TOPIC_LEGACY_NPC_PROFILE
 
 REJECTING_OUTCOMES = frozenset(
     {IntakeOutcome.INVALID, IntakeOutcome.UNKNOWN_TOPIC, IntakeOutcome.STORAGE_UNAVAILABLE}
+)
+
+# The HTTP adapter opts in separately, and no other transport inherits the choice.
+IGNORED_LEGACY_PROFILE_DETAIL = (
+    f"{TOPIC_LEGACY_NPC_PROFILE} is accepted for compatibility and ignored; "
+    "profiles are loaded from the backend-owned local document"
 )
 
 
@@ -34,7 +41,10 @@ async def submit_jsonl(lines: Iterable[str], service: IntakeService) -> list[Int
         if not line.strip():
             continue
         topic, message = _read_record(line_number, line)
-        result = await service.submit(topic, message)
+        if topic == TOPIC_LEGACY_NPC_PROFILE:
+            result = IntakeResult(IntakeOutcome.IGNORED, IGNORED_LEGACY_PROFILE_DETAIL)
+        else:
+            result = await service.submit(topic, message)
         if result.outcome in REJECTING_OUTCOMES:
             raise JsonlIntakeError(line_number, f"{result.outcome.value}: {result.detail}")
         results.append(result)

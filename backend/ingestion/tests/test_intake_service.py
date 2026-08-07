@@ -12,6 +12,7 @@ from backend.ingestion.http_intake import STATUS_FOR_OUTCOME
 from backend.ingestion.intake_service import IntakeOutcome
 from backend.ingestion.message_validation import (
     TOPIC_CONVERSATION_TURN,
+    TOPIC_LEGACY_NPC_PROFILE,
     TOPIC_WORLD_SNAPSHOT,
 )
 from backend.ingestion.tests.canonical_messages import conversation_turn, world_snapshot
@@ -53,6 +54,24 @@ async def test_world_state_does_not_depend_on_the_durable_store(
     result = await pipeline.intake.submit(TOPIC_WORLD_SNAPSHOT, world_snapshot())
 
     assert result.outcome is IntakeOutcome.APPLIED
+
+
+async def test_a_transport_that_does_not_opt_in_gets_unknown_topic_for_a_legacy_profile(
+    unopened: tuple[Pipeline, RecordingRouter],
+) -> None:
+    """Accepting `npc.profile` is a development-adapter choice, not a boundary behaviour.
+
+    A transport that converges on `submit` without opting in — the NATS adapter under #11 —
+    must see the same `UNKNOWN_TOPIC` any other non-contract subject gets, so a misconfigured
+    publisher surfaces instead of being quietly answered "ignored".
+    """
+    pipeline, _ = unopened
+
+    result = await pipeline.intake.submit(
+        TOPIC_LEGACY_NPC_PROFILE, {"npc_id": "npc.shopkeeper", "name": "Mara"}
+    )
+
+    assert result.outcome is IntakeOutcome.UNKNOWN_TOPIC
 
 
 def test_every_intake_outcome_has_an_http_status() -> None:
