@@ -306,17 +306,14 @@ class GenerationCoordinator:
         )
         return await self._command(request, behaviour)
 
-    async def publish(self, work: Generation, command: BehaviourCommand) -> None:
-        """Commit and send one command, and let an answered conversation move on."""
+    async def publish(self, command: BehaviourCommand) -> None:
+        """Commit and send one command, and let an answered conversation move on.
+
+        Whether it moves is `conversation.note_command_outcome`'s to decide, so this path and
+        restart recovery cannot answer the question differently.
+        """
         delivered = await self.publisher.publish(command)
-        if work.trigger is not Trigger.TURN:
-            return
-        # A command that never reached Minecraft leaves the conversation where it was, rather
-        # than claiming an answer arrived. Neither branch regenerates.
-        if delivered:
-            await self.conversation.note_published(work.session_id)
-        else:
-            await self.conversation.note_not_generated(work.session_id)
+        await self.conversation.note_command_outcome(command, delivered)
 
     def abandon(self, work: Generation, reason: str) -> None:
         if work.trigger is Trigger.TURN and work.turn is not None:

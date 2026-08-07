@@ -21,6 +21,7 @@ from backend.ingestion.tests.canonical_messages import (
     GUARD,
     SHOPKEEPER,
     THIEF,
+    TURN_ID,
     active_conversation,
     npc,
     world_snapshot,
@@ -181,6 +182,28 @@ async def test_a_promotion_already_satisfied_by_unexpired_behaviour_never_calls_
             one["reason"] for one in harness.observed(TRIGGER_SUPPRESSED)
             if one["trigger"] == "promotion"
         ] == ["current behaviour already satisfies the promotion"]
+
+
+async def test_an_expiry_answering_the_waiting_player_moves_the_conversation_too(
+    conversation: Harness,
+) -> None:
+    """One predicate decides this, so expiry is not a special case of it either.
+
+    The regenerated command answers the same waiting turn the expired one did, which is the
+    whole reason expiry borrowed the conversation path. Reading the trigger instead would leave
+    the conversation behind exactly here.
+    """
+    await conversation.snapshot(sequence=1, active_conversation=active_conversation())
+    await conversation.turn()
+    await conversation.settle()
+
+    conversation.clock.advance(15_001)
+    await conversation.snapshot(sequence=2, active_conversation=active_conversation())
+    await conversation.settle()
+
+    published = conversation.published_for(SHOPKEEPER)
+    assert [command.turn_id for command in published] == [TURN_ID, TURN_ID]
+    assert conversation.state() is ConversationState.READY
 
 
 async def test_expired_behaviour_during_an_active_conversation_generates_again(

@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import re
 from typing import Any
 
 import pytest
@@ -177,6 +178,37 @@ def test_rejects_an_attention_edge_referencing_a_non_candidate() -> None:
         )
 
 
+@pytest.mark.parametrize(
+    ("overrides", "field"),
+    [
+        ({"session_id": ""}, "session_id"),
+        ({"world_id": ""}, "world_id"),
+        ({"player": world_snapshot()["player"] | {"player_id": ""}}, "player.player_id"),
+        (
+            {"active_conversation": active_conversation() | {"conversation_id": ""}},
+            "active_conversation.conversation_id",
+        ),
+        (
+            {"active_conversation": active_conversation(target_npc_id="")},
+            "active_conversation.target_npc_id",
+        ),
+        ({"attention_edges": [attention_edge(source="")]}, "attention_edges.0.source_npc_id"),
+        ({"attention_edges": [attention_edge(target="")]}, "attention_edges.0.target_npc_id"),
+    ],
+)
+def test_rejects_an_empty_identifier_in_a_world_snapshot(
+    overrides: dict[str, Any], field: str
+) -> None:
+    """The documented rule covers every identifier, not only the NPC ones.
+
+    The error is matched by field, because the candidate-set rule would reject an empty
+    conversation target or edge endpoint for a different reason and a bare `raises` could not
+    tell the two apart.
+    """
+    with pytest.raises(MessageValidationError, match=rf"{re.escape(field)}: "):
+        validate_world_snapshot(world_snapshot(**overrides))
+
+
 def test_error_names_the_offending_field() -> None:
     with pytest.raises(MessageValidationError, match="candidate_count"):
         validate_world_snapshot(world_snapshot(candidate_count=9))
@@ -335,6 +367,23 @@ def test_event_role_membership_and_event_type_stay_open() -> None:
     assert both.actor_npc_ids == both.responder_npc_ids == [THIEF]
 
     assert validate_game_event(game_event(event_type="lute_recital")).event_type == "lute_recital"
+
+
+@pytest.mark.parametrize("role", ["actor_npc_ids", "target_npc_ids", "responder_npc_ids"])
+def test_rejects_an_empty_npc_identifier_in_an_event_role(role: str) -> None:
+    with pytest.raises(MessageValidationError, match=rf"{role}\.0: "):
+        validate_game_event(game_event(1, **{role: [""]}))
+
+
+def test_rejects_an_empty_session_id_on_every_inbound_message() -> None:
+    """The session id keys every durable store, so an empty one must never get that far."""
+    for validate, payload in (
+        (validate_world_snapshot, world_snapshot(session_id="")),
+        (validate_game_event, game_event(session_id="")),
+        (validate_conversation_turn, conversation_turn(session_id="")),
+    ):
+        with pytest.raises(MessageValidationError, match="session_id: "):
+            validate(payload)
 
 
 def test_an_event_may_reference_an_npc_that_is_not_a_current_candidate() -> None:

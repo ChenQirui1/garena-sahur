@@ -11,6 +11,7 @@ from __future__ import annotations
 
 from pathlib import Path
 from typing import AsyncIterator
+from urllib.parse import quote
 
 import pytest
 import pytest_asyncio
@@ -26,6 +27,13 @@ from backend.orchestration.tests.fakes import ManualClock, RecordingPublisher
 from backend.orchestration.tests.harness import Harness, running, settings_for
 
 OTHER_SESSION = "demo-02"
+
+# Nothing constrains the characters in a session id, and both of these mean something to SQLite's
+# `LIKE`: `_` matches any single character and `%` matches any run of them. `NEIGHBOUR_SESSION` is
+# chosen to be matched by `WILDCARD_SESSION` read as a pattern, so a cleanup that pattern-matches
+# rather than compares deletes evidence belonging to a session nobody asked about.
+WILDCARD_SESSION = "demo_01%"
+NEIGHBOUR_SESSION = "demoX01-other"
 
 # What `seed` leaves behind: one turn, one event revision, and a command, a claim and an
 # attempt for each of the two triggers it fires — the event reaction and the player turn.
@@ -153,6 +161,35 @@ async def test_a_cleaned_session_can_generate_for_the_same_turn_again(
 
     assert len(harness.provider.started) == calls_before + 1
     assert len(harness.published_for(SHOPKEEPER)) == published_before + 1
+
+
+async def claimed_sessions(harness: Harness) -> list[str]:
+    rows = await harness.pipeline.store.connection.execute_fetchall(
+        "SELECT session_id FROM generation_claims ORDER BY session_id"
+    )
+    return [str(row[0]) for row in rows]
+
+
+async def generate_for_session(harness: Harness, session_id: str, turn_id: str) -> None:
+    """Drive one session far enough to leave a durable generation claim behind."""
+    await harness.snapshot(session_id=session_id, active_conversation=active_conversation())
+    await harness.turn(session_id=session_id, turn_id=turn_id)
+    await harness.settle()
+
+
+async def test_cleaning_a_session_whose_id_reads_as_a_pattern_spares_its_neighbour(
+    harness: Harness,
+) -> None:
+    """A session id is compared, never matched: no character in one may mean anything."""
+    await generate_for_session(harness, WILDCARD_SESSION, "turn-200")
+    await generate_for_session(harness, NEIGHBOUR_SESSION, "turn-201")
+    assert await claimed_sessions(harness) == [NEIGHBOUR_SESSION, WILDCARD_SESSION]
+
+    await harness.client.delete(f"/sessions/{quote(WILDCARD_SESSION, safe='')}")
+
+    assert await claimed_sessions(harness) == [
+        NEIGHBOUR_SESSION
+    ], "only the named session's claims are released"
 
 
 async def test_restarting_without_cleanup_keeps_everything(tmp_path: Path) -> None:

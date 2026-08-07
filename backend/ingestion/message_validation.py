@@ -42,6 +42,11 @@ SPEAKER_TYPE_PLAYER = "player"
 # A JSON number, whether the publisher wrote it with a decimal point or not.
 JsonNumber = float | int
 
+# Every identifier carries this: `docs/message_schemas.md` puts "IDs are stable, non-empty
+# strings" among the conventions shared by all three inbound messages, so an emptiness rule on
+# some identifiers and not others would be house style rather than the documented boundary.
+# Nothing else about their shape is constrained — spaces, slashes and wildcards are all legal
+# characters that no source bounds (#2).
 NonEmptyText = Annotated[str, StringConstraints(min_length=1)]
 NonNegativeNumber = Annotated[JsonNumber, Field(ge=0.0)]
 UnitInterval = Annotated[JsonNumber, Field(ge=0.0, le=1.0)]
@@ -75,7 +80,7 @@ class CandidatePolicy(CanonicalModel):
 
 
 class Player(CanonicalModel):
-    player_id: str
+    player_id: NonEmptyText
     position: Vector3
     look_direction: Vector3
 
@@ -83,8 +88,8 @@ class Player(CanonicalModel):
 class ActiveConversationRef(CanonicalModel):
     """Minecraft's reference to the one conversation receiving direct player interaction."""
 
-    conversation_id: str
-    target_npc_id: str
+    conversation_id: NonEmptyText
+    target_npc_id: NonEmptyText
 
 
 class NpcObservation(CanonicalModel):
@@ -101,8 +106,8 @@ class NpcObservation(CanonicalModel):
 class AttentionEdge(CanonicalModel):
     """A structural attention relation the backend passes through unweighted."""
 
-    source_npc_id: str
-    target_npc_id: str
+    source_npc_id: NonEmptyText
+    target_npc_id: NonEmptyText
     kind: NonEmptyText
     active: bool
 
@@ -112,8 +117,8 @@ class WorldSnapshot(CanonicalModel):
 
     schema_version: Literal["1.0"]
     message_type: Literal["world_snapshot"]
-    session_id: str
-    world_id: str
+    session_id: NonEmptyText
+    world_id: NonEmptyText
     sequence: Annotated[int, Field(ge=0)]
     timestamp_ms: Annotated[int, Field(ge=0)]
     candidate_policy: CandidatePolicy
@@ -159,9 +164,9 @@ class GameEvent(CanonicalModel):
     event_type: NonEmptyText
     status: Literal["started", "updated", "ended", "cancelled"]
     position: Vector3
-    actor_npc_ids: list[str]
-    target_npc_ids: list[str]
-    responder_npc_ids: list[str]
+    actor_npc_ids: list[NonEmptyText]
+    target_npc_ids: list[NonEmptyText]
+    responder_npc_ids: list[NonEmptyText]
 
     @property
     def is_terminal(self) -> bool:

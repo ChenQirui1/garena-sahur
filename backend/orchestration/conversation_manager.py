@@ -26,6 +26,7 @@ from backend.ingestion.message_validation import (
     ConversationTurn,
     WorldSnapshot,
 )
+from backend.orchestration.behaviour_command import BehaviourCommand
 from backend.orchestration.conversation_store import ConversationStore
 from backend.orchestration.router_port import ActiveConversation, RouterConversationState
 
@@ -178,6 +179,26 @@ class ConversationManager:
                 (session_id, reference.conversation_id)
             ),
         )
+
+    async def note_command_outcome(
+        self, command: BehaviourCommand, delivered: bool
+    ) -> None:
+        """Move the conversation for one published command, or leave it where it was.
+
+        A command carrying a turn identity is the answer to that turn, whatever queued it: a
+        promotion that finds the player still waiting answers them exactly as the turn itself
+        would have. Deciding from the trigger instead would make the same command move the
+        conversation only on the restart path, where the trigger is no longer known.
+
+        A command that never reached Minecraft leaves the conversation where it was, rather than
+        claiming an answer arrived. Neither branch regenerates.
+        """
+        if command.turn_id is None:
+            return
+        if delivered:
+            await self.note_published(command.session_id)
+        else:
+            await self.note_not_generated(command.session_id)
 
     async def note_published(self, session_id: str) -> None:
         session = self._session(session_id)
