@@ -50,10 +50,6 @@ CACHED_DIALOGUE_DOCUMENT = """
 }
 """
 
-# Routing can queue generation and generation can re-route, so settling alternates between the
-# two until neither has anything left rather than draining each once.
-SETTLE_ROUNDS = 8
-
 PROFILE_DOCUMENT = """
 {
   "version": 1,
@@ -135,13 +131,10 @@ class Harness:
 
         Intake now returns once work is queued, so a component assertion has to say when it
         expects the queue to have drained rather than assuming the HTTP response meant it had.
+        This is the service's own drain, so a suite cannot pass against a laxer definition of
+        settled than the one the JSONL replay reports on.
         """
-        for _ in range(SETTLE_ROUNDS):
-            await self.pipeline.handoff.wait_until_idle()
-            await self.pipeline.scheduler.drain()
-            if self.pipeline.handoff.is_idle:
-                return
-        raise AssertionError("routing and generation did not settle")
+        await self.pipeline.drain()
 
     def pending_generation_count(self) -> int:
         return self.pipeline.scheduler.pending_count

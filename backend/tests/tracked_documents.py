@@ -34,6 +34,11 @@ _TREE = re.compile(r"```text\n(.*?)\n```", re.S)
 # is assigned per package, and a package's owner governs everything beneath it.
 _OWNED_ENTRY = re.compile(r"^│   [├└]── ([A-Za-z0-9_]+(?:\.py)?)/?\s+# (.+?)\s*$")
 
+# Any entry at any depth, as its indent, name, and the owner comment when it carries one. Depth
+# is what turns a bare name into a path: `main.py` and `run_backend.py` are both first-level
+# entries, and only the area above them says which is `backend/` and which is `scripts/`.
+_TREE_ENTRY = re.compile(r"^((?:│   )*)[├└]── ([A-Za-z0-9_.-]+)/?(?:\s+# (.+?))?\s*$")
+
 
 def documented_payload(section: str, which: int = 0) -> dict[str, Any]:
     """The example payload under a `## ` heading, by the heading's opening text.
@@ -59,6 +64,22 @@ def documented_keys(section: str, which: int = 0) -> set[str]:
     return set(documented_payload(section, which))
 
 
+def documented_topics(direction: str) -> set[str]:
+    """The transport topics the schema document's topic table lists for one direction.
+
+    The table is the document's only statement of the topic names themselves; every section
+    below it describes a payload. A topic we accept under another spelling would pass every
+    payload comparison and still be unreachable from Ivan's publisher.
+    """
+    rows = re.findall(
+        rf"^\|\s*{re.escape(direction)}\s*\|\s*`([^`]+)`\s*\|",
+        MESSAGE_SCHEMAS.read_text(),
+        re.M,
+    )
+    assert rows, f"no topic rows for {direction!r}; the table's shape has changed"
+    return set(rows)
+
+
 def owner_by_name() -> dict[str, str]:
     """Every package and root module the tracked ownership tree names, mapped to its owner."""
     tree = _TREE.search(TEAM_ARCHITECTURE.read_text())
@@ -70,6 +91,32 @@ def owner_by_name() -> dict[str, str]:
     }
     assert owners, "parsed no ownership entries; the tree's shape has changed"
     return owners
+
+
+def tracked_paths_by_owner() -> dict[str, set[str]]:
+    """Every path the ownership tree names, at every depth, grouped by the owner beside it.
+
+    Paths are repository-relative and carry no trailing slash, so a caller cannot tell a package
+    from a module by shape alone — which is correct, because the document assigns both the same
+    way and a caller that cares can ask the filesystem.
+    """
+    tree = _TREE.search(TEAM_ARCHITECTURE.read_text())
+    assert tree is not None, f"{TEAM_ARCHITECTURE.name} has no ownership tree"
+
+    grouped: dict[str, set[str]] = {}
+    ancestors: list[str] = []
+    for line in tree.group(1).splitlines():
+        entry = _TREE_ENTRY.match(line)
+        if entry is None:
+            continue
+        indent, name, owner = entry.groups()
+        depth = len(indent) // 4
+        ancestors[depth:] = [name]
+        if owner is not None:
+            grouped.setdefault(owner.strip(), set()).add("/".join(ancestors))
+
+    assert grouped, "parsed no ownership entries; the tree's shape has changed"
+    return grouped
 
 
 def backend_packages_by_owner() -> dict[str, set[str]]:

@@ -6,6 +6,13 @@
 # scaffolding) or the jointly owned `tests/test_end_to_end.py` — making a green tick claim
 # coverage the team does not have.
 #
+# The filter below watches everything the tracked ownership tree assigns to us, not just what the
+# suite collects: `data/npc_profiles.json` and `data/cached_dialogue.json` are read by the owned
+# cases and are named by no `testpaths` entry, and `.env.example` and the scripts are ours whether
+# or not a case reads them. `backend/tests/test_ci_covers_the_owned_suite.py` derives that set from
+# `docs/team-architecture.md` and fails if this list falls behind it, so a path we acquire is
+# watched by acquiring it rather than by anyone remembering this file.
+#
 # The two `paths` lists are duplicated rather than shared through a YAML anchor because GitHub
 # Actions does not support anchors or aliases. Keep them in step.
 #
@@ -29,6 +36,11 @@ on:
       - 'backend/context/**'
       - 'backend/models/**'
       - 'backend/tests/**'
+      - 'data/npc_profiles.json'
+      - 'data/cached_dialogue.json'
+      - 'scripts/run_backend.py'
+      - 'scripts/replay_jsonl.py'
+      - '.env.example'
       - 'pytest.ini'
       - 'requirements.txt'
       - '.github/workflows/backend-owned-suite.yml'
@@ -42,6 +54,11 @@ on:
       - 'backend/context/**'
       - 'backend/models/**'
       - 'backend/tests/**'
+      - 'data/npc_profiles.json'
+      - 'data/cached_dialogue.json'
+      - 'scripts/run_backend.py'
+      - 'scripts/replay_jsonl.py'
+      - '.env.example'
       - 'pytest.ini'
       - 'requirements.txt'
       - '.github/workflows/backend-owned-suite.yml'

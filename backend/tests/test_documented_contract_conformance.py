@@ -21,8 +21,11 @@ import dataclasses
 
 import pytest
 
+from backend.config import Settings
 from backend.context.npc_profiles import NpcProfile
+from backend.ingestion.intake_service import IntakeOutcome
 from backend.ingestion.message_validation import (
+    TOPIC_LEGACY_NPC_PROFILE,
     validate_conversation_turn,
     validate_game_event,
     validate_world_snapshot,
@@ -32,10 +35,15 @@ from backend.ingestion.message_validation import (
     GameEvent,
     WorldSnapshot,
 )
+from backend.main import build_pipeline
 from backend.orchestration.behaviour_command import BehaviourCommand
 from backend.orchestration.router_port import RoutingResult, RoutingSnapshot
 from backend.orchestration.telemetry_port import ModelCallFact
-from backend.tests.tracked_documents import documented_keys, documented_payload
+from backend.tests.tracked_documents import (
+    documented_keys,
+    documented_payload,
+    documented_topics,
+)
 
 WORLD_SNAPSHOT = "1. `world.snapshot`"
 GAME_EVENT = "2. `game.event`"
@@ -45,6 +53,10 @@ ROUTING_RESULT = "5. Router `routing_result`"
 BEHAVIOUR_COMMAND = "6. `behaviour.command`"
 TELEMETRY_RECORD = "7. `telemetry.record`"
 NPC_PROFILES = "8. Backend-local NPC profiles"
+
+# The direction column of the document's transport-topic table that names our intake.
+INBOUND = "Minecraft → backend"
+UNKNOWN_TOPIC = IntakeOutcome.UNKNOWN_TOPIC
 
 # The document describes `command_sequence` in §6's prose as a provisional extension, pending the
 # shared ordering decision under #4. It is emitted deliberately and is not drift.
@@ -130,6 +142,31 @@ def test_the_profile_model_matches_the_documented_local_document() -> None:
 
     assert documented - ours == set(), "documented but absent from NpcProfile"
     assert ours - documented == PROFILE_LOCAL_FIELDS, "undeclared field on NpcProfile"
+
+
+async def test_we_accept_exactly_the_topics_the_document_sends_us(tmp_path) -> None:
+    """A payload can match perfectly and still be unreachable under the wrong topic name.
+
+    Driven through `IntakeService` rather than compared against our `TOPIC_` constants, because
+    a constant nothing dispatches on is a name we publish, not a name we accept. The empty
+    message is deliberate: validation runs before storage, so every documented topic is refused
+    as invalid and only an undocumented one is refused as unknown.
+    """
+    pipeline = build_pipeline(Settings(database_path=tmp_path / "spotlight.sqlite3"))
+
+    outcomes = {
+        topic: (await pipeline.intake.submit(topic, {})).outcome
+        for topic in documented_topics(INBOUND) | {"world.weather"}
+    }
+
+    assert {topic for topic, outcome in outcomes.items() if outcome is not UNKNOWN_TOPIC} == (
+        documented_topics(INBOUND)
+    ), f"the topics we route are not the ones the document sends us: {outcomes}"
+
+
+def test_the_legacy_profile_topic_is_not_one_the_document_sends_us() -> None:
+    """§ Transport topics: `npc.profile` "is not an MVP transport topic"."""
+    assert TOPIC_LEGACY_NPC_PROFILE not in documented_topics(INBOUND)
 
 
 def test_latency_is_derived_rather_than_stored() -> None:

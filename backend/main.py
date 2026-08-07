@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import FastAPI
@@ -19,7 +20,8 @@ from backend.context.npc_profiles import NpcProfiles, ProfileDocumentError
 from backend.ingestion import http_intake
 from backend.ingestion.durable_store import DurableStore
 from backend.ingestion.event_store import EventStore
-from backend.ingestion.intake_service import IntakeService
+from backend.ingestion.intake_service import IntakeResult, IntakeService
+from backend.ingestion.jsonl_intake import submit_jsonl
 from backend.ingestion.turn_store import TurnStore
 from backend.ingestion.world_state_store import WorldStateStore
 from backend.models.fallback import FallbackDocumentError, FallbackLibrary
@@ -48,6 +50,19 @@ from backend.orchestration.router_port import AttentionTier, RouterPort
 from backend.orchestration.routing_snapshot import RoutingSnapshots
 from backend.orchestration.session_cleanup import SessionCleanup
 from backend.orchestration.telemetry_port import LoggingTelemetry, TelemetryPort
+
+
+# Routing can queue generation and generation can re-route, so draining alternates between the
+# two until neither has anything left rather than draining each once.
+DRAIN_ROUNDS = 8
+
+
+class PipelineNotReady(RuntimeError):
+    """Something a drain waits on is not running, so waiting on it would never return."""
+
+
+class PipelineNotDrained(RuntimeError):
+    """Routing and generation kept producing work for each other, so nothing may be reported."""
 
 
 @dataclass(frozen=True, slots=True)
@@ -84,6 +99,50 @@ class Pipeline:
             and self.store.is_open
             and self.handoff.is_running
             and self.scheduler.is_running
+        )
+
+    @asynccontextmanager
+    async def running(self) -> AsyncIterator[None]:
+        """Start every stage, in the one order any entry point may start them in.
+
+        Every transport adapter runs the whole pipeline or none of it. A second start order,
+        even a correct one, is how the JSONL replay came to run without the generation
+        scheduler and to discard whatever it queued.
+        """
+        await self.store.open()
+        await self.handoff.start()
+        await self.scheduler.start()
+        # Recovery runs after the scheduler so a republished command has somewhere to go, and
+        # before intake opens so a redelivered turn cannot race the work it is recovering.
+        await self.recovery.run()
+        try:
+            yield
+        finally:
+            await self.scheduler.stop()
+            await self.handoff.stop()
+            await self.store.close()
+
+    async def drain(self) -> None:
+        """Wait until routing and generation have both stopped producing work for each other.
+
+        A caller that reports what a batch of messages produced has to know the pipeline
+        finished with them; failing loudly is the alternative to reporting a summary while work
+        is still queued. An unready pipeline is refused rather than waited on: a stage that is
+        not running never empties its queue, and one that could not load its documents would
+        drain to a summary the HTTP path answers 503 for.
+        """
+        if not self.is_ready:
+            raise PipelineNotReady(
+                self.readiness_error or "the owned pipeline is not running every stage"
+            )
+
+        for _ in range(DRAIN_ROUNDS):
+            await self.handoff.wait_until_idle()
+            await self.scheduler.drain()
+            if self.handoff.is_idle and self.scheduler.pending_count == 0:
+                return
+        raise PipelineNotDrained(
+            f"routing and generation did not settle within {DRAIN_ROUNDS} rounds"
         )
 
 
@@ -223,24 +282,27 @@ def create_app(settings: Settings | None = None, adapters: Adapters = Adapters()
 
     @asynccontextmanager
     async def lifespan(app: FastAPI) -> AsyncIterator[None]:
-        await pipeline.store.open()
-        await pipeline.handoff.start()
-        await pipeline.scheduler.start()
-        # Recovery runs after the scheduler so a republished command has somewhere to go, and
-        # before intake opens so a redelivered turn cannot race the work it is recovering.
-        await pipeline.recovery.run()
-        try:
+        async with pipeline.running():
             yield
-        finally:
-            await pipeline.scheduler.stop()
-            await pipeline.handoff.stop()
-            await pipeline.store.close()
 
     app = FastAPI(title="Spotlight backend", lifespan=lifespan)
     app.state.settings = settings
     app.state.pipeline = pipeline
     app.include_router(http_intake.router)
     return app
+
+
+async def replay_jsonl(path: Path, pipeline: Pipeline) -> list[IntakeResult]:
+    """Run one JSONL file through the same lifecycle the service runs, and drain it.
+
+    Draining before returning is what makes the outcomes reportable: intake accepts a turn by
+    queueing generation, so a replay that stopped at the intake result would be reporting
+    success over work it was about to throw away.
+    """
+    async with pipeline.running():
+        results = await submit_jsonl(path.read_text().splitlines(), pipeline.intake)
+        await pipeline.drain()
+    return results
 
 
 def _load_profiles(settings: Settings) -> tuple[NpcProfiles, str | None]:

@@ -1,14 +1,15 @@
 """Development JSONL intake over the same application service as HTTP.
 
 Owner: Jerome & Richard
+
+Transport only: reading a file and submitting its records. `docs/team-architecture.md` makes
+`backend/main.py` the module that "connects all Python modules", so composing this adapter with
+a running pipeline happens there and the wiring is never reached back into from here.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
-import sys
-from pathlib import Path
 from typing import Any, Iterable
 
 from backend.ingestion.intake_service import IntakeOutcome, IntakeResult, IntakeService
@@ -63,28 +64,3 @@ def _read_record(line_number: int, line: str) -> tuple[str, dict[str, Any]]:
         raise JsonlIntakeError(line_number, "topic must be a string and message an object")
 
     return record["topic"], record["message"]
-
-
-async def _replay(path: Path) -> None:
-    # Imported here so the adapter itself stays free of the FastAPI application wiring.
-    from backend.config import load_settings
-    from backend.main import build_pipeline
-
-    pipeline = build_pipeline(load_settings())
-    await pipeline.store.open()
-    await pipeline.handoff.start()
-    try:
-        results = await submit_jsonl(path.read_text().splitlines(), pipeline.intake)
-        await pipeline.handoff.wait_until_idle()
-    finally:
-        await pipeline.handoff.stop()
-        await pipeline.store.close()
-
-    for outcome in IntakeOutcome:
-        submitted = sum(1 for result in results if result.outcome is outcome)
-        if submitted:
-            print(f"{outcome.value}: {submitted}")
-
-
-if __name__ == "__main__":
-    asyncio.run(_replay(Path(sys.argv[1])))
