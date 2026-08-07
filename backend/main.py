@@ -121,8 +121,12 @@ class Pipeline:
 
         A caller that reports what a batch of messages produced has to know the pipeline
         finished with them; failing loudly is the alternative to reporting a summary while work
-        is still queued.
+        is still queued. A stage that is not running would never make the queue empty, so
+        waiting on it is an unbounded hang rather than a drain, and it is refused here.
         """
+        if not (self.handoff.is_running and self.scheduler.is_running):
+            raise PipelineNotDrained("routing and generation are not both running")
+
         for _ in range(DRAIN_ROUNDS):
             await self.handoff.wait_until_idle()
             await self.scheduler.drain()
