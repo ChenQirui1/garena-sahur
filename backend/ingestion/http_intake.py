@@ -11,11 +11,18 @@ from fastapi import APIRouter, Depends, Request, Response, status
 from pydantic import BaseModel, ConfigDict
 
 from backend.ingestion.intake_service import IntakeOutcome, IntakeResult, IntakeService
+from backend.ingestion.message_validation import TOPIC_LEGACY_NPC_PROFILE
 from backend.orchestration.router_handoff import RouterHandoff, RoutingOutcome
 from backend.orchestration.router_port import RoutingDiagnostics, TierCounts
 
 if TYPE_CHECKING:
     from backend.main import Pipeline
+
+# The JSONL adapter opts in separately, and no other transport inherits the choice.
+IGNORED_LEGACY_PROFILE_DETAIL = (
+    f"{TOPIC_LEGACY_NPC_PROFILE} is accepted for compatibility and ignored; "
+    "profiles are loaded from the backend-owned local document"
+)
 
 STATUS_FOR_OUTCOME = {
     IntakeOutcome.APPLIED: status.HTTP_202_ACCEPTED,
@@ -56,7 +63,10 @@ async def ingest(
     response: Response,
     service: Annotated[IntakeService, Depends(_intake_service)],
 ) -> dict[str, str | None]:
-    result = await service.submit(submission.topic, submission.message)
+    if submission.topic == TOPIC_LEGACY_NPC_PROFILE:
+        result = IntakeResult(IntakeOutcome.IGNORED, IGNORED_LEGACY_PROFILE_DETAIL)
+    else:
+        result = await service.submit(submission.topic, submission.message)
     response.status_code = STATUS_FOR_OUTCOME[result.outcome]
     return _as_body(result)
 

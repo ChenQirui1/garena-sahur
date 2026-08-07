@@ -12,7 +12,10 @@ import pytest_asyncio
 from backend.config import Settings
 from backend.ingestion.intake_service import IntakeOutcome, IntakeService
 from backend.ingestion.jsonl_intake import JsonlIntakeError, submit_jsonl
-from backend.ingestion.message_validation import TOPIC_WORLD_SNAPSHOT
+from backend.ingestion.message_validation import (
+    TOPIC_LEGACY_NPC_PROFILE,
+    TOPIC_WORLD_SNAPSHOT,
+)
 from backend.ingestion.tests.canonical_messages import SESSION_ID, WORLD_ID, world_snapshot
 from backend.main import Adapters, build_pipeline
 from backend.orchestration.router_handoff import RouterHandoff
@@ -65,6 +68,32 @@ async def test_records_share_the_application_service_and_reach_the_router(
     ]
     assert handoff.latest_outcome(SESSION_ID, WORLD_ID).sequence == 2
     assert router.routed != []
+
+
+async def test_a_legacy_profile_record_is_ignored_rather_than_failing_the_replay(
+    service: tuple[IntakeService, RouterHandoff, RecordingRouter],
+) -> None:
+    """This adapter opts in to the legacy topic, so a replay carrying one still runs on.
+
+    `world.weather` in the rejection cases below is the contrast: an unknown topic stops the
+    replay, and only the topic this adapter explicitly accepts does not.
+    """
+    intake, handoff, router = service
+
+    results = await submit_jsonl(
+        [
+            record(TOPIC_LEGACY_NPC_PROFILE, {"npc_id": "npc.shopkeeper", "name": "Mara"}),
+            record(SNAPSHOT_TOPIC, world_snapshot(sequence=1)),
+        ],
+        intake,
+    )
+    await handoff.wait_until_idle()
+
+    ignored, applied = results
+
+    assert (ignored.outcome, applied.outcome) == (IntakeOutcome.IGNORED, IntakeOutcome.APPLIED)
+    assert ignored.detail is not None and "ignored" in ignored.detail
+    assert len(router.routed) == 1
 
 
 @pytest.mark.parametrize(

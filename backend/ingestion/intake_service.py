@@ -5,6 +5,10 @@ Owner: Jerome & Richard
 A durable message is committed before its outcome is reported, so an acknowledged turn is one
 the backend can still honour after a restart. What the message then arms — routing refresh or
 one generation — is decided by conversation state, never by the transport that carried it.
+
+Only the three runtime inputs are topics here; anything else is an unknown topic. Accepting a
+legacy record for compatibility is a choice each development adapter makes for itself, so a
+transport that has not made it surfaces its misconfiguration rather than being answered here.
 """
 
 from __future__ import annotations
@@ -17,7 +21,6 @@ from backend.ingestion.event_store import EventStore, RevisionOutcome
 from backend.ingestion.message_validation import (
     TOPIC_CONVERSATION_TURN,
     TOPIC_GAME_EVENT,
-    TOPIC_LEGACY_NPC_PROFILE,
     TOPIC_WORLD_SNAPSHOT,
     ConversationTurn,
     GameEvent,
@@ -40,11 +43,6 @@ from backend.orchestration.observations import (
 )
 from backend.orchestration.router_handoff import RouterHandoff
 from backend.orchestration.routing_snapshot import RoutingSnapshots
-
-IGNORED_LEGACY_PROFILE_DETAIL = (
-    f"{TOPIC_LEGACY_NPC_PROFILE} is accepted for compatibility and ignored; "
-    "profiles are loaded from the backend-owned local document"
-)
 
 
 class IntakeOutcome(StrEnum):
@@ -91,8 +89,6 @@ class IntakeService:
         self._radii = radii
 
     async def submit(self, topic: str, message: object) -> IntakeResult:
-        if topic == TOPIC_LEGACY_NPC_PROFILE:
-            return IntakeResult(IntakeOutcome.IGNORED, IGNORED_LEGACY_PROFILE_DETAIL)
         if topic == TOPIC_WORLD_SNAPSHOT:
             return await self._submit_world_snapshot(message)
         if topic == TOPIC_GAME_EVENT:
