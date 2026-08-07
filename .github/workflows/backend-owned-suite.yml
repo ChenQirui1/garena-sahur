@@ -57,9 +57,9 @@ jobs:
     name: Jerome & Richard backend suite
     runs-on: ubuntu-latest
     steps:
-      - uses: actions/checkout@v4
+      - uses: actions/checkout@v5
 
-      - uses: actions/setup-python@v5
+      - uses: actions/setup-python@v6
         with:
           # The version `requirements.txt` names.
           python-version: '3.12'
