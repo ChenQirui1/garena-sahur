@@ -20,8 +20,11 @@ from backend.ingestion.tests.canonical_messages import (
     TURN_ID,
     active_conversation,
 )
+from backend.ingestion.event_store import EventStore
+from backend.ingestion.turn_store import TurnStore
 from backend.models.mock_provider import MODEL_FOR_TIER, PROVIDER
 from backend.orchestration.conversation_manager import ConversationState
+from backend.orchestration.conversation_store import ConversationStore
 from backend.orchestration.router_port import AttentionTier
 from backend.orchestration.deduplication import ATTEMPTED, FAILED
 from backend.orchestration.observations import (
@@ -35,11 +38,27 @@ from backend.orchestration.tests.fakes import ManualClock, RecordingPublisher
 from backend.orchestration.tests.harness import Harness, running, settings_for
 
 
-async def rows(harness: Harness, query: str, *parameters: object) -> list[tuple[object, ...]]:
-    return [
-        tuple(row)
-        for row in await harness.pipeline.store.connection.execute_fetchall(query, parameters)
-    ]
+def conversations(harness: Harness) -> ConversationStore:
+    """Read persisted conversation rows the way the manager's own restore reads them."""
+    return ConversationStore(harness.pipeline.store, harness.pipeline.observations)
+
+
+async def stored_state(harness: Harness, session_id: str) -> str:
+    sessions = await conversations(harness).sessions()
+    return next(one.state for one in sessions if one.session_id == session_id)
+
+
+async def attempt_outcomes(harness: Harness) -> list[str]:
+    """Every attempt's outcome, closed ones included.
+
+    `ProviderAttempts.unresolved` deliberately reports only attempts still open, so a closed
+    outcome has no public reader. Naming the column keeps the assertion about which outcome was
+    recorded rather than about a row's shape.
+    """
+    rows = await harness.pipeline.store.connection.execute_fetchall(
+        "SELECT outcome FROM provider_attempts ORDER BY started_at_ms, claim_key"
+    )
+    return [str(row[0]) for row in rows]
 
 
 async def crash_during_generation(
@@ -59,16 +78,14 @@ async def crash_during_generation(
         if with_event:
             await first.event()
         await first.turn()
-        await first.provider.started_after(1)
+        await first.provider.wait_for_started(1)
 
-        attempts = await rows(
-            first, "SELECT outcome FROM provider_attempts WHERE session_id = ?", SESSION_ID
-        )
-        assert attempts == [(ATTEMPTED,)], "the attempt must be committed before the call"
+        open_attempts = await first.pipeline.generation.attempts.unresolved()
+        assert [(one.session_id, one.outcome) for one in open_attempts] == [
+            (SESSION_ID, ATTEMPTED)
+        ], "the attempt must be committed before the call"
         assert first.state() is ConversationState.AWAITING_RESPONSE
-        assert await rows(
-            first, "SELECT state FROM conversation_sessions WHERE session_id = ?", SESSION_ID
-        ) == [(ConversationState.AWAITING_RESPONSE.value,)]
+        assert await stored_state(first, SESSION_ID) == ConversationState.AWAITING_RESPONSE
 
 
 async def test_durable_state_survives_reopening_the_same_database(tmp_path: Path) -> None:
@@ -81,14 +98,19 @@ async def test_durable_state_survives_reopening_the_same_database(tmp_path: Path
     async for second in running(settings, publisher=publisher, clock=clock):
         await second.settle()
 
-        assert await rows(second, "SELECT turn_id FROM conversation_turns") == [(TURN_ID,)]
-        assert await rows(second, "SELECT event_id FROM game_events") == [(EVENT_ID,)]
-        assert await rows(second, "SELECT COUNT(*) FROM generation_claims") == [(1,)]
-        assert await rows(second, "SELECT COUNT(*) FROM provider_attempts") == [(1,)]
-        assert await rows(second, "SELECT COUNT(*) FROM behaviour_commands") == [(1,)]
-        assert await rows(
-            second, "SELECT conversation_id FROM conversation_threads"
-        ) == [(CONVERSATION_ID,)]
+        turns = await TurnStore(second.pipeline.store).recent(
+            SESSION_ID, CONVERSATION_ID, limit=10
+        )
+        assert [one.turn_id for one in turns] == [TURN_ID]
+
+        event = await EventStore(second.pipeline.store).latest(SESSION_ID, EVENT_ID)
+        assert event is not None and event.event.event_id == EVENT_ID
+
+        threads = await conversations(second).threads()
+        assert [one.conversation_id for one in threads] == [CONVERSATION_ID]
+
+        counts = await second.durable_counts()
+        assert (counts.claims, counts.attempts, counts.commands) == (1, 1, 1)
 
 
 async def test_conversation_state_is_restored_rather_than_reset_to_idle(
@@ -150,7 +172,7 @@ async def test_the_recovered_attempt_is_reported_once_and_then_closed(
         await second.settle()
 
         assert [one.outcome for one in await second.pipeline.generation.attempts.unresolved()] == []
-        assert await rows(second, "SELECT outcome FROM provider_attempts") == [(FAILED,)]
+        assert await attempt_outcomes(second) == [FAILED]
 
         facts = [
             fact for fact in second.telemetry.model_calls
@@ -196,11 +218,7 @@ async def test_a_stored_but_unsent_command_is_republished_with_identical_bytes(
         publisher.hold()
         await first.snapshot(active_conversation=active_conversation())
         await first.turn()
-        await first.provider.started_after(1)
-        for _ in range(50):
-            if publisher.attempts:
-                break
-            await first.settle_routing()
+        await publisher.wait_for_attempt(1)
         stored = await first.pipeline.commands.unpublished()
         assert len(stored) == 1, "the command must be committed before it is sent"
 
@@ -226,11 +244,7 @@ async def test_a_command_whose_lifetime_lapsed_while_down_expires_instead(
         publisher.hold()
         await first.snapshot(active_conversation=active_conversation())
         await first.turn()
-        await first.provider.started_after(1)
-        for _ in range(50):
-            if publisher.attempts:
-                break
-            await first.settle_routing()
+        await publisher.wait_for_attempt(1)
         assert len(await first.pipeline.commands.unpublished()) == 1
 
     publisher.release()
@@ -253,25 +267,13 @@ async def test_starting_up_deletes_no_durable_evidence(tmp_path: Path) -> None:
         await first.snapshot(active_conversation=active_conversation())
         await first.turn()
         await first.settle()
-        before = await rows(
-            first,
-            "SELECT (SELECT COUNT(*) FROM conversation_turns),"
-            " (SELECT COUNT(*) FROM game_events),"
-            " (SELECT COUNT(*) FROM behaviour_commands),"
-            " (SELECT COUNT(*) FROM generation_claims)",
-        )
+        before = await first.durable_counts()
 
     async for second in running(settings, publisher=publisher, clock=clock):
-        after = await rows(
-            second,
-            "SELECT (SELECT COUNT(*) FROM conversation_turns),"
-            " (SELECT COUNT(*) FROM game_events),"
-            " (SELECT COUNT(*) FROM behaviour_commands),"
-            " (SELECT COUNT(*) FROM generation_claims)",
-        )
+        after = await second.durable_counts()
 
     assert after == before
-    assert before[0][0] == 1 and before[0][2] == 1
+    assert before.turns == 1 and before.commands == 1
 
 
 async def promote_onto_a_waiting_turn(harness: Harness, router: TierScriptRouter) -> None:
@@ -326,11 +328,7 @@ async def test_a_promotion_carrying_a_turn_moves_the_conversation_the_same_way_e
         assert isinstance(router, TierScriptRouter)
         publisher.hold()
         await promote_onto_a_waiting_turn(first, router)
-        await first.provider.started_after(1)
-        for _ in range(50):
-            if publisher.attempts:
-                break
-            await first.settle_routing()
+        await publisher.wait_for_attempt(1)
         assert len(await first.pipeline.commands.unpublished()) == 1
 
     publisher.release()

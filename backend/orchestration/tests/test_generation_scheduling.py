@@ -286,7 +286,7 @@ async def test_a_router_failure_does_not_cancel_work_already_queued(
         await harness.settle_routing()
 
         await harness.event(actor_npc_ids=[THIEF], target_npc_ids=[SHOPKEEPER])
-        await harness.provider.started_after(1)
+        await harness.provider.wait_for_started(1)
         queued = THIEF if harness.provider.started[0].npc_id == SHOPKEEPER else SHOPKEEPER
         assert harness.pending_generation_count() == 1
 
@@ -325,7 +325,7 @@ async def test_a_result_that_omits_a_candidate_does_not_cancel_its_queued_work(
         await harness.settle_routing()
 
         await harness.event(actor_npc_ids=[THIEF], target_npc_ids=[SHOPKEEPER])
-        await harness.provider.started_after(1)
+        await harness.provider.wait_for_started(1)
         queued = THIEF if harness.provider.started[0].npc_id == SHOPKEEPER else SHOPKEEPER
         assert harness.pending_generation_count() == 1
 
@@ -364,7 +364,7 @@ async def test_a_newer_turn_supersedes_pending_event_work_for_the_same_npc(
         await harness.event(
             revision=2, actor_npc_ids=[THIEF], target_npc_ids=[SHOPKEEPER, GUARD]
         )
-        await harness.provider.started_after(1)
+        await harness.provider.wait_for_started(1)
 
         await harness.turn()
         superseded = harness.observed(WORK_SUPERSEDED)
@@ -392,7 +392,7 @@ async def test_demotion_to_ambient_cancels_queued_work(tmp_path: Path) -> None:
         await harness.settle_routing()
 
         await harness.event(actor_npc_ids=[THIEF], target_npc_ids=[SHOPKEEPER])
-        await harness.provider.started_after(1)
+        await harness.provider.wait_for_started(1)
         in_flight = harness.provider.started[0].npc_id
         queued = THIEF if in_flight == SHOPKEEPER else SHOPKEEPER
 
@@ -415,7 +415,7 @@ async def test_demotion_to_ambient_discards_late_provider_output(tmp_path: Path)
         await harness.settle_routing()
 
         await harness.event(actor_npc_ids=[THIEF], target_npc_ids=[SHOPKEEPER])
-        await harness.provider.started_after(1)
+        await harness.provider.wait_for_started(1)
 
         router.tiers[SHOPKEEPER] = AMBIENT
         await harness.snapshot(sequence=2)
@@ -441,7 +441,7 @@ async def test_a_terminal_revision_cancels_work_claimed_for_an_earlier_revision(
         await harness.settle_routing()
 
         await harness.event(actor_npc_ids=[THIEF], target_npc_ids=[SHOPKEEPER, GUARD])
-        await harness.provider.started_after(1)
+        await harness.provider.wait_for_started(1)
         started = harness.provider.started[0].npc_id
 
         await harness.event(
@@ -469,7 +469,7 @@ async def test_a_terminal_revision_discards_late_provider_output(tmp_path: Path)
         await harness.settle_routing()
 
         await harness.event(actor_npc_ids=[THIEF], target_npc_ids=[SHOPKEEPER])
-        await harness.provider.started_after(1)
+        await harness.provider.wait_for_started(1)
 
         await harness.event(
             revision=2, status="cancelled", actor_npc_ids=[THIEF], target_npc_ids=[SHOPKEEPER]
@@ -496,7 +496,7 @@ async def test_provider_concurrency_is_bounded_per_tier_and_in_total(
         await harness.event(
             actor_npc_ids=list(CROWD[:6]), target_npc_ids=list(CROWD[6:]), responder_npc_ids=[]
         )
-        await harness.provider.started_after(8)
+        await harness.provider.wait_for_started(8)
 
         assert harness.provider.peak_in_flight == 8
         assert harness.provider.peak_in_flight_for(FOCUSED) == 2
@@ -515,7 +515,7 @@ async def test_one_request_is_in_flight_per_npc(conversation: Harness) -> None:
 
     await conversation.turn()
     await conversation.turn(turn_id="turn-005", turn_index=5, text="And after that?")
-    await conversation.provider.started_after(1)
+    await conversation.provider.wait_for_started(1)
 
     assert conversation.provider.peak_in_flight_for_npc(SHOPKEEPER) == 1
 
@@ -545,7 +545,7 @@ async def test_focused_work_is_dispatched_before_earlier_reactive_work(
         await harness.event(
             actor_npc_ids=[CROWD[0], CROWD[1]], target_npc_ids=[CROWD[2]], responder_npc_ids=[]
         )
-        await harness.provider.started_after(1)
+        await harness.provider.wait_for_started(1)
 
         assert [request.npc_id for request in harness.provider.started] == [CROWD[2]]
 
@@ -573,7 +573,7 @@ async def test_work_within_one_tier_is_dispatched_first_in_first_out(
         await harness.event(
             actor_npc_ids=list(arrival), target_npc_ids=[], responder_npc_ids=[]
         )
-        await harness.provider.started_after(1)
+        await harness.provider.wait_for_started(1)
 
         harness.provider.release_all()
         await harness.settle()
@@ -594,7 +594,7 @@ async def test_high_frequency_restatements_do_not_grow_the_generation_queue(
         await harness.settle_routing()
 
         await harness.event(revision=1)
-        await harness.provider.started_after(1)
+        await harness.provider.wait_for_started(1)
 
         for revision in range(2, 22):
             await harness.event(revision=revision, status="updated")
@@ -633,7 +633,7 @@ async def test_a_demotion_on_the_trigger_path_cancels_work_queued_behind_a_provi
         await harness.settle_routing()
 
         await harness.event(actor_npc_ids=[THIEF], target_npc_ids=[SHOPKEEPER])
-        await harness.provider.started_after(1)
+        await harness.provider.wait_for_started(1)
         queued = THIEF if harness.provider.started[0].npc_id == SHOPKEEPER else SHOPKEEPER
 
         router.tiers[queued] = AMBIENT
@@ -677,7 +677,7 @@ async def test_a_cancelled_turn_returns_the_conversation_to_engaged(
         await harness.settle_routing()
 
         await harness.turn()
-        await harness.provider.started_after(1)
+        await harness.provider.wait_for_started(1)
         assert harness.state() is ConversationState.AWAITING_RESPONSE
 
         router.tiers[SHOPKEEPER] = AMBIENT

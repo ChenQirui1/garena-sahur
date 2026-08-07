@@ -45,14 +45,10 @@ REACTIVE_TIMEOUT_MS = 2_000
 class BrokenProvider:
     """Refuses every call, the way an unreachable provider would."""
 
-    def __init__(self) -> None:
-        self.started: list[GenerationRequest] = []
-
     def identity(self, tier: AttentionTier) -> ProviderIdentity:
         return ProviderIdentity(provider="broken", model="broken-model")
 
     async def generate(self, request: GenerationRequest) -> GeneratedBehaviour:
-        self.started.append(request)
         raise RuntimeError("provider is unreachable")
 
 
@@ -67,7 +63,7 @@ async def test_a_focused_call_is_bounded_by_the_focused_budget(tmp_path: Path) -
     async for held in running(settings_for(tmp_path), gated=True):
         await held.snapshot(active_conversation=active_conversation())
         await held.turn()
-        await held.provider.started_after(1)
+        await held.provider.wait_for_started(1)
 
         expired = await held.deadlines.expire_open()
         await held.settle()
@@ -85,7 +81,7 @@ async def test_a_reactive_call_is_bounded_by_the_shorter_reactive_budget(
         # No active conversation, so nothing is Focused and every reaction is Reactive.
         await held.snapshot()
         await held.event()
-        await held.provider.started_after(1)
+        await held.provider.wait_for_started(1)
 
         expired = await held.deadlines.expire_open()
         await held.settle()
@@ -100,7 +96,7 @@ async def test_a_timed_out_call_publishes_fallback_content_and_is_never_repeated
     async for held in running(settings_for(tmp_path), gated=True):
         await held.snapshot(active_conversation=active_conversation())
         await held.turn()
-        await held.provider.started_after(1)
+        await held.provider.wait_for_started(1)
 
         await held.deadlines.expire_open()
         await held.settle()
@@ -122,7 +118,7 @@ async def test_a_timed_out_attempt_is_reported_as_one_failed_model_call(
     async for held in running(settings_for(tmp_path), gated=True):
         await held.snapshot(active_conversation=active_conversation())
         await held.turn()
-        await held.provider.started_after(1)
+        await held.provider.wait_for_started(1)
 
         await held.deadlines.expire_open()
         await held.settle()
@@ -140,18 +136,13 @@ async def test_a_timed_out_attempt_is_reported_as_one_failed_model_call(
 
 
 async def test_a_failing_provider_falls_back_without_retrying(tmp_path: Path) -> None:
-    broken = BrokenProvider()
     settings = settings_for(tmp_path)
-    async for failing in running(settings):
-        failing.pipeline.generation.gateway._providers = {  # noqa: SLF001
-            AttentionTier.FOCUSED: broken,
-            AttentionTier.REACTIVE: broken,
-        }
+    async for failing in running(settings, provider=BrokenProvider()):
         await failing.snapshot(active_conversation=active_conversation())
         await failing.turn()
         await failing.settle()
 
-        assert len(broken.started) == 1, "orchestration must not retry a failed call"
+        assert len(failing.provider.started) == 1, "orchestration must not retry a failed call"
         assert len(failing.publisher.published) == 1
         assert failing.publisher.published[0].fallback_used is True
         assert failing.observed(MODEL_CALL_FAILED)
@@ -165,7 +156,7 @@ async def test_a_fallback_command_still_marks_the_conversation_ready(
     async for held in running(settings_for(tmp_path), gated=True):
         await held.snapshot(active_conversation=active_conversation())
         await held.turn()
-        await held.provider.started_after(1)
+        await held.provider.wait_for_started(1)
 
         await held.deadlines.expire_open()
         await held.settle()
@@ -180,7 +171,7 @@ async def test_work_superseded_before_the_timeout_produces_no_fallback_command(
     async for held in running(settings_for(tmp_path), gated=True):
         await held.snapshot(active_conversation=active_conversation())
         await held.turn()
-        await held.provider.started_after(1)
+        await held.provider.wait_for_started(1)
 
         # The conversation ends, so the target drops out of every generating tier and the work
         # in flight is no longer current when the provider finally gives up.
@@ -202,7 +193,7 @@ async def test_a_cancelled_event_reaction_produces_no_fallback_command(
     async for held in running(settings, EventAwareRouter(), gated=True):
         await held.snapshot()
         await held.event(revision=1)
-        await held.provider.started_after(1)
+        await held.provider.wait_for_started(1)
 
         await held.event(revision=2, status="ended")
         await held.deadlines.expire_open()
@@ -218,7 +209,7 @@ async def test_a_second_delivery_after_a_fallback_does_not_call_the_provider_aga
     async for held in running(settings_for(tmp_path), gated=True):
         await held.snapshot(active_conversation=active_conversation())
         await held.turn()
-        await held.provider.started_after(1)
+        await held.provider.wait_for_started(1)
         await held.deadlines.expire_open()
         await held.settle()
 

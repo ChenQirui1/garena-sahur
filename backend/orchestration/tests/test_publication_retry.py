@@ -115,21 +115,14 @@ async def test_retries_stop_once_the_command_can_no_longer_be_accepted(
 
 
 async def test_every_attempt_sends_byte_identical_content(harness: Harness) -> None:
-    harness.publisher.fail_next = 0
-    sent: list[str] = []
-
-    async def record_then_fail(command: object) -> None:
-        sent.append(command.serialized)  # type: ignore[attr-defined]
-        if len(sent) < 3:
-            raise RuntimeError("refused")
-
-    # Replacing the bound method is the point: the publisher fails twice, then succeeds.
-    harness.publisher.publish = record_then_fail  # type: ignore[method-assign]
+    # The publisher refuses twice and then accepts, so three attempts carry the same command.
+    harness.publisher.fail_next = 2
 
     await harness.snapshot(active_conversation=active_conversation())
     await harness.turn()
     await harness.settle()
 
+    sent = harness.publisher.attempted_bytes
     assert len(sent) == 3
     assert len(set(sent)) == 1, "a retry must reuse the identical serialized command"
 
@@ -162,7 +155,7 @@ async def test_publication_expiry_returns_a_closed_conversation_to_idle(
         held.publisher.fail_next = 1_000
         await held.snapshot(active_conversation=active_conversation())
         await held.turn()
-        await held.provider.started_after(1)
+        await held.provider.wait_for_started(1)
 
         # Minecraft closes the conversation while the answer is still being generated.
         await held.snapshot(sequence=1843)

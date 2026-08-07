@@ -26,13 +26,6 @@ from backend.orchestration.command_store import CommandStore, StoredCommand
 from backend.orchestration.router_port import AttentionTier
 from backend.orchestration.telemetry_port import ModelCallFact
 
-# Waiting for the pipeline to do what it is going to do. Durable reads cross a real thread, so
-# a bare `sleep(0)` is not enough to let them land.
-TICK_SECONDS = 0.002
-WAIT_TICKS = 500
-SETTLE_TICKS = 25
-
-
 class ManualClock:
     """A clock that only moves when a test moves it.
 
@@ -128,12 +121,14 @@ class RecordingPublisher:
     def __init__(self, commands: CommandStore | None = None) -> None:
         self.published: list[BehaviourCommand] = []
         self.sent_bytes: list[str] = []
+        self.attempted_bytes: list[str] = []
         self.stored_when_published: list[BehaviourCommand | None] = []
         self.on_publish: Callable[[], None] | None = None
         self.fail_next = 0
         self.attempts = 0
         self._commands = commands
         self._gate: asyncio.Event | None = None
+        self._attempted = asyncio.Event()
 
     def bind(self, commands: CommandStore) -> None:
         self._commands = commands
@@ -147,8 +142,20 @@ class RecordingPublisher:
             self._gate.set()
             self._gate = None
 
+    async def wait_for_attempt(self, expected: int) -> None:
+        """Return once ``expected`` publications have been attempted.
+
+        Each pass awaits the next attempt rather than re-checking after a delay, so a held
+        publisher is observed by the arrival itself and never by how long the wait ran.
+        """
+        while self.attempts < expected:
+            self._attempted.clear()
+            await self._attempted.wait()
+
     async def publish(self, command: StoredCommand) -> None:
         self.attempts += 1
+        self.attempted_bytes.append(command.serialized)
+        self._attempted.set()
         gate = self._gate
         if gate is not None:
             await gate.wait()
@@ -175,6 +182,7 @@ class GatedProvider:
     def __init__(self, inner: Provider, gated: bool = False) -> None:
         self._inner = inner
         self._gate: asyncio.Event | None = None
+        self._started = asyncio.Event()
         self._in_flight: list[GenerationRequest] = []
         self.started: list[GenerationRequest] = []
         self.peak_in_flight = 0
@@ -201,26 +209,22 @@ class GatedProvider:
     def peak_in_flight_for_npc(self, npc_id: str) -> int:
         return self._peak_by_npc[npc_id]
 
-    async def started_after(self, expected: int) -> int:
-        """Wait for ``expected`` calls to start, then for the scheduler to stop starting more.
+    async def wait_for_started(self, expected: int) -> None:
+        """Return once ``expected`` calls have entered the provider.
 
-        The sleeps wait for work to happen; they never decide an assertion. Once the scheduler
-        has dispatched everything its limits allow, the count is stable, so the number this
-        returns is the same on every run.
+        Each pass awaits the next call rather than re-checking after a delay, so what is waited
+        on is the call itself. Once these calls are held, the count is also stable without any
+        further waiting: the queue starts more work only when a slot frees or new work arrives,
+        and a held call frees nothing. Where a test needs a slot to be free before it can claim
+        the count settled, it releases the gate and drains rather than waiting out a tick.
         """
-        for _ in range(WAIT_TICKS):
-            if len(self.started) >= expected:
-                break
-            await asyncio.sleep(TICK_SECONDS)
-
-        settled = len(self.started)
-        for _ in range(SETTLE_TICKS):
-            await asyncio.sleep(TICK_SECONDS)
-        assert len(self.started) == settled, "the scheduler started more work than it may"
-        return settled
+        while len(self.started) < expected:
+            self._started.clear()
+            await self._started.wait()
 
     async def generate(self, request: GenerationRequest) -> GeneratedBehaviour:
         self.started.append(request)
+        self._started.set()
         self._in_flight.append(request)
         self._record_peaks()
         gate = self._gate
