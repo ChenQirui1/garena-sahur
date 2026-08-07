@@ -541,31 +541,41 @@ async def test_the_total_limit_binds_while_every_tier_still_has_room(
     assert harness.provider.peak_in_flight == 4
 
 
-async def test_one_request_is_in_flight_per_npc(conversation: Harness) -> None:
-    """The second turn arrives once the first is already in flight, which is the only scene
-    where the per-NPC slot is what serialises them.
+async def test_one_request_is_in_flight_per_npc(tmp_path: Path) -> None:
+    """A second turn waits for its NPC's slot even though every limit still has room.
 
-    Sending both before either starts does not test this rule: the second turn is still
-    unconfirmed when the first is admitted, so it is not queued yet and nothing about the
-    in-flight slot decides anything. Here the second turn is genuinely waiting with a free
-    Focused slot and a free total slot, so its own NPC being busy is the only thing left.
+    Two things this scene needs, and the obvious version has neither. The second turn has to
+    arrive *after* the first is in flight — send both first and the second is still unconfirmed
+    when the first is admitted, so it is not queued and the in-flight slot decides nothing. And
+    the thief's reaction has to be startable at the same time, because awaiting it is what
+    proves the queue took a dispatch pass while the shopkeeper's call was still held. Without
+    that, releasing the gate is the first chance the queue gets and the rule is never asked.
     """
-    await conversation.snapshot(sequence=1, active_conversation=active_conversation())
-    await conversation.settle_routing()
-    conversation.provider.gate()
+    router = TierScriptRouter({SHOPKEEPER: FOCUSED, THIEF: REACTIVE, GUARD: AMBIENT})
+    async for harness in running(settings_for(tmp_path), router=router, gated=True):
+        await harness.snapshot(sequence=1, active_conversation=active_conversation())
+        await harness.settle_routing()
 
-    await conversation.turn()
-    await conversation.provider.wait_for_started(1)
-    await conversation.turn(turn_id="turn-005", turn_index=5, text="And after that?")
+        await harness.turn()
+        await harness.provider.wait_for_started(1)
 
-    assert conversation.pending_generation_count() == 1, "the second turn must be waiting"
-    assert conversation.provider.peak_in_flight_for_npc(SHOPKEEPER) == 1
+        await harness.turn(turn_id="turn-005", turn_index=5, text="And after that?")
+        await harness.event(actor_npc_ids=[THIEF], target_npc_ids=[GUARD])
+        await harness.provider.wait_for_started(2)
 
-    conversation.provider.release_all()
-    await conversation.settle()
+        started = sorted(one.npc_id for one in harness.provider.started)
+        assert started == sorted([SHOPKEEPER, THIEF]), (
+            "the thief's reaction means the queue took a dispatch pass with a free Focused "
+            "slot and a free total slot, and the shopkeeper's second turn still did not start"
+        )
+        assert harness.pending_generation_count() > 0, "that turn is queued, not dropped"
 
-    assert len(conversation.provider.started) == 2, "both turns are answered, one at a time"
-    assert conversation.provider.peak_in_flight_for_npc(SHOPKEEPER) == 1
+        harness.provider.release_all()
+        await harness.settle()
+
+    assert harness.provider.peak_in_flight_for_npc(SHOPKEEPER) == 1
+    answered = {command.turn_id for command in harness.published_for(SHOPKEEPER)}
+    assert {TURN_ID, "turn-005"} <= answered, "both turns are answered, one at a time"
 
 
 async def test_focused_work_is_dispatched_before_earlier_reactive_work(
