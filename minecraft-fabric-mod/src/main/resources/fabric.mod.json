@@ -1,0 +1,37 @@
+{
+	"schemaVersion": 1,
+	"id": "dynamic-llm-lod",
+	"version": "${version}",
+	"name": "Spotlight Dynamic LLM LOD",
+	"description": "Publishes Minecraft NPC perception data and applies Spotlight behaviour commands.",
+	"authors": [
+		"Ivan Chen"
+	],
+	"contact": {
+		"homepage": "https://github.com/ChenQirui1/garena-sahur",
+		"sources": "https://github.com/ChenQirui1/garena-sahur/tree/main/minecraft-fabric-mod"
+	},
+	"license": "CC0-1.0",
+	"icon": "assets/dynamic-llm-lod/icon.png",
+	"environment": "*",
+	"entrypoints": {
+		"main": [
+			"com.example.DynamicLlmLod"
+		],
+		"client": [
+			"com.example.client.DynamicLlmLodClient"
+		]
+	},
+	"mixins": [
+		{
+			"config": "dynamic-llm-lod.client.mixins.json",
+			"environment": "client"
+		}
+	],
+	"depends": {
+		"fabricloader": ">=0.19.3",
+		"minecraft": "~1.20.1",
+		"java": ">=17",
+		"fabric-api": "*"
+	}
+}
