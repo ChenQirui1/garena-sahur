@@ -205,7 +205,8 @@ class FlakyRouter:
     def route(self, snapshot: RoutingSnapshot) -> RoutingResult:
         if self.failing:
             raise RuntimeError("router is briefly unavailable")
-        return self.inner.route(snapshot)  # type: ignore[attr-defined]
+        result: RoutingResult = self.inner.route(snapshot)  # type: ignore[attr-defined]
+        return result
 
     def reset_session(self, session_id: str) -> None:
         return None

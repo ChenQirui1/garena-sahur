@@ -34,6 +34,11 @@ from backend.ingestion.tests.canonical_messages import (
 )
 
 
+def override(field: str, value: object) -> dict[str, Any]:
+    """One parametrised field replacement, as the payload mapping the builder takes."""
+    return {field: value}
+
+
 def test_accepts_the_team_sent_world_snapshot_payload() -> None:
     snapshot = validate_world_snapshot(
         world_snapshot(
@@ -73,7 +78,7 @@ def test_accepts_the_team_sent_world_snapshot_payload() -> None:
     ids=["sequence-zero", "empty-candidate-set", "spaced-id", "slashed-id", "old-timestamp"],
 )
 def test_accepts_values_no_shared_document_bounds(field: str, value: object) -> None:
-    payload = world_snapshot(**{field: value})
+    payload = world_snapshot(**override(field, value))
     if field == "npcs":
         payload["candidate_count"] = 0
 
@@ -114,7 +119,7 @@ def test_accepts_an_unrecognised_attention_edge_kind() -> None:
 )
 def test_rejects_unsupported_versions_types_and_ordering(field: str, value: object) -> None:
     with pytest.raises(MessageValidationError):
-        validate_world_snapshot(world_snapshot(**{field: value}))
+        validate_world_snapshot(world_snapshot(**override(field, value)))
 
 
 def test_rejects_unknown_top_level_and_payload_fields() -> None:

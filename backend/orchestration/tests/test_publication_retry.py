@@ -123,7 +123,7 @@ async def test_every_attempt_sends_byte_identical_content(harness: Harness) -> N
         if len(sent) < 3:
             raise RuntimeError("refused")
 
-    harness.publisher.publish = record_then_fail  # type: ignore[assignment]
+    harness.publisher.publish = record_then_fail  # type: ignore[method-assign]
 
     await harness.snapshot(active_conversation=active_conversation())
     await harness.turn()

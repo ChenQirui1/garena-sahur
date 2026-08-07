@@ -35,6 +35,13 @@ from backend.orchestration.observations import (
 from backend.orchestration.tests.harness import Harness, running, settings_for
 
 
+def counted(fact: dict[str, object], name: str) -> int:
+    """One token count off a telemetry record, which carries `object` values by contract."""
+    counted = fact[name]
+    assert isinstance(counted, int), f"{name} is {counted!r}, not a count"
+    return counted
+
+
 @pytest_asyncio.fixture
 async def harness(tmp_path: Path) -> AsyncIterator[Harness]:
     async for started in running(settings_for(tmp_path)):
@@ -305,7 +312,7 @@ async def test_one_model_call_fact_is_emitted_for_the_generated_command(
     assert fact["status"] == "success"
     assert fact["fallback_used"] is False
     assert fact["error_code"] is None
-    assert fact["input_tokens"] > 0 and fact["output_tokens"] > 0
+    assert counted(fact, "input_tokens") > 0 and counted(fact, "output_tokens") > 0
 
 
 WITHOUT_THE_SHOPKEEPER = """

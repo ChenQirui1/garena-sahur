@@ -2,9 +2,16 @@
 
 from __future__ import annotations
 
-from backend.ingestion.message_validation import validate_world_snapshot
+from backend.ingestion.message_validation import WorldSnapshot, validate_world_snapshot
 from backend.ingestion.tests.canonical_messages import SESSION_ID, WORLD_ID, world_snapshot
 from backend.ingestion.world_state_store import WorldStateStore
+
+
+def stored(store: WorldStateStore, session_id: str, world_id: str) -> WorldSnapshot:
+    """The retained snapshot for one session and world, where a case means there is one."""
+    retained = store.latest(session_id, world_id)
+    assert retained is not None, f"nothing retained for {session_id}/{world_id}"
+    return retained
 
 
 def test_a_newer_snapshot_replaces_older_state() -> None:
@@ -40,9 +47,9 @@ def test_ordering_is_kept_per_session_and_world() -> None:
     other_session = validate_world_snapshot(world_snapshot(sequence=1, session_id="demo-02"))
     assert store.apply_if_newer(other_session) is True
 
-    assert store.latest(SESSION_ID, WORLD_ID).sequence == 9
-    assert store.latest(SESSION_ID, "nether").sequence == 1
-    assert store.latest("demo-02", WORLD_ID).sequence == 1
+    assert stored(store, SESSION_ID, WORLD_ID).sequence == 9
+    assert stored(store, SESSION_ID, "nether").sequence == 1
+    assert stored(store, "demo-02", WORLD_ID).sequence == 1
 
 
 def test_retained_state_keeps_the_observations_later_enrichment_reads() -> None:

@@ -9,6 +9,7 @@ wrong rather than merely differently worded.
 
 from __future__ import annotations
 
+from backend.context.trigger_kind import TriggerKind
 from backend.context.context_builder import (
     EVENT,
     HISTORY,
@@ -18,7 +19,6 @@ from backend.context.context_builder import (
     WORLD,
     ContextSection,
     GenerationContext,
-    TriggerKind,
 )
 from backend.context.npc_profiles import NpcProfiles
 from backend.orchestration.router_port import AttentionTier

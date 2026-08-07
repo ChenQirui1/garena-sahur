@@ -18,6 +18,9 @@ Every delta is declared below with its reason. A fourth appearing is a finding.
 from __future__ import annotations
 
 import dataclasses
+import inspect
+from pathlib import Path
+from typing import Any, Callable
 
 import pytest
 
@@ -104,7 +107,9 @@ def test_the_documented_key_set_is_exactly_the_models(section: str, model: type)
     ],
     ids=["world.snapshot", "game.event", "conversation.turn"],
 )
-def test_the_documented_example_is_accepted_by_our_validator(section: str, validate) -> None:
+def test_the_documented_example_is_accepted_by_our_validator(
+    section: str, validate: Callable[[dict[str, Any]], object]
+) -> None:
     """Stronger than key comparison: the document's own payload survives our rules.
 
     A field we kept but constrained more tightly than the team does would pass the key check and
@@ -144,7 +149,7 @@ def test_the_profile_model_matches_the_documented_local_document() -> None:
     assert ours - documented == PROFILE_LOCAL_FIELDS, "undeclared field on NpcProfile"
 
 
-async def test_we_accept_exactly_the_topics_the_document_sends_us(tmp_path) -> None:
+async def test_we_accept_exactly_the_topics_the_document_sends_us(tmp_path: Path) -> None:
     """A payload can match perfectly and still be unreachable under the wrong topic name.
 
     Driven through `IntakeService` rather than compared against our `TOPIC_` constants, because
@@ -172,7 +177,7 @@ def test_the_legacy_profile_topic_is_not_one_the_document_sends_us() -> None:
 def test_latency_is_derived_rather_than_stored() -> None:
     """The document lists `latency_ms` as a field, so the allowance above has to be real."""
     assert "latency_ms" not in field_names(ModelCallFact)
-    assert ModelCallFact.latency_ms.__class__ is property
+    assert isinstance(inspect.getattr_static(ModelCallFact, "latency_ms"), property)
 
 
 def _a_command() -> BehaviourCommand:

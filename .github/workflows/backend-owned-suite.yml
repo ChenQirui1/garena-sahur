@@ -21,8 +21,10 @@
 # waiting for a status that will never arrive. Required and path-filtered are mutually exclusive —
 # if the team wants this required later, the filter comes out in the same change. See issue #44.
 #
-# mypy is not run here. It has no configuration in this repository and a standing 20-error
-# baseline, so gating on it would mean a red check from the first run.
+# mypy runs beside pytest and gates the same paths. Bare `mypy` is deliberate for the same reason
+# bare `pytest` is: `mypy.ini`'s `files` decides the scope, so this file cannot widen it onto
+# another owner's package. Both are pinned in `requirements.txt`, so neither a pytest nor a mypy
+# release can turn this check red on a day nobody touched the code.
 
 name: Jerome & Richard backend suite
 
@@ -42,6 +44,7 @@ on:
       - 'scripts/replay_jsonl.py'
       - '.env.example'
       - 'pytest.ini'
+      - 'mypy.ini'
       - 'requirements.txt'
       - '.github/workflows/backend-owned-suite.yml'
   push:
@@ -60,6 +63,7 @@ on:
       - 'scripts/replay_jsonl.py'
       - '.env.example'
       - 'pytest.ini'
+      - 'mypy.ini'
       - 'requirements.txt'
       - '.github/workflows/backend-owned-suite.yml'
   workflow_dispatch:
@@ -87,3 +91,5 @@ jobs:
       - run: pip install -r requirements.txt
 
       - run: python -m pytest
+
+      - run: python -m mypy
