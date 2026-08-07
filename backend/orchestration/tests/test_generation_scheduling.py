@@ -29,7 +29,7 @@ from backend.orchestration.conversation_manager import ConversationState
 from backend.orchestration.generation_policy import NOTHING_TO_SPEAK_ABOUT
 from backend.orchestration.observations import (
     GENERATION_SUPPRESSED,
-    ROUTING_RESULT_REJECTED,
+    ROUTING_FAILED_CLOSED,
     TRIGGER_SUPPRESSED,
     WORK_CANCELLED,
     WORK_FAILED,
@@ -319,7 +319,7 @@ async def test_a_result_that_omits_a_candidate_does_not_cancel_its_queued_work(
         await harness.settle()
 
     # The defect is recorded as its own thing, not as the NPC losing a generating tier.
-    rejected = harness.observed(ROUTING_RESULT_REJECTED)
+    rejected = harness.observed(ROUTING_FAILED_CLOSED)
     assert [one["sequence"] for one in rejected] == [2]
     assert queued in str(rejected[0]["reason"])
     assert len(harness.published_for(queued)) == 1

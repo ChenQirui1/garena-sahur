@@ -12,7 +12,7 @@ import pytest
 import pytest_asyncio
 from pydantic import ValidationError
 
-from backend.orchestration.observations import ROUTING_RESULT_REJECTED, Observations
+from backend.orchestration.observations import ROUTING_FAILED_CLOSED, Observations
 from backend.orchestration.router_handoff import (
     RouterHandoff,
     RoutingOutcome,
@@ -328,7 +328,7 @@ async def test_a_rejected_result_is_observed_apart_from_a_demotion() -> None:
 
     outcome = await handoff.route_now(snapshot)
 
-    rejected = [one for one in observations.recorded if one.name == ROUTING_RESULT_REJECTED]
+    rejected = [one for one in observations.recorded if one.name == ROUTING_FAILED_CLOSED]
     assert [one.fields["status"] for one in rejected] == [RoutingStatus.INVALID_RESULT]
     assert rejected[0].fields["reason"] == outcome.failure_reason
     assert rejected[0].fields["sequence"] == 1842
@@ -342,7 +342,7 @@ async def test_a_routed_result_is_not_observed_as_rejected() -> None:
 
     await handoff.route_now(snapshot)
 
-    assert [one for one in observations.recorded if one.name == ROUTING_RESULT_REJECTED] == []
+    assert [one for one in observations.recorded if one.name == ROUTING_FAILED_CLOSED] == []
 
 
 class Listener:
