@@ -26,6 +26,7 @@ from backend.orchestration.command_store import CommandStore, StoredCommand
 from backend.orchestration.router_port import AttentionTier
 from backend.orchestration.telemetry_port import ModelCallFact
 
+
 class ManualClock:
     """A clock that only moves when a test moves it.
 

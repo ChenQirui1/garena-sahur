@@ -16,7 +16,6 @@ from asgi_lifespan import LifespanManager
 from httpx import ASGITransport, AsyncClient
 
 from backend.config import Settings
-from backend.models.model_gateway import Provider
 from backend.ingestion.tests.canonical_messages import (
     SESSION_ID,
     conversation_turn,
@@ -25,6 +24,7 @@ from backend.ingestion.tests.canonical_messages import (
 )
 from backend.main import Adapters, Pipeline, create_app
 from backend.models.mock_provider import MockProvider
+from backend.models.model_gateway import Provider
 from backend.orchestration.behaviour_command import BehaviourCommand
 from backend.orchestration.conversation_manager import ConversationState
 from backend.orchestration.router_port import RouterPort, RoutingNpc, RoutingSnapshot
