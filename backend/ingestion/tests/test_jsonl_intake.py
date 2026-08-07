@@ -11,7 +11,7 @@ import pytest_asyncio
 
 from backend.config import Settings
 from backend.ingestion.intake_service import IntakeOutcome, IntakeService
-from backend.ingestion.jsonl_intake import JsonlIntakeError, replay_jsonl, submit_jsonl
+from backend.ingestion.jsonl_intake import JsonlIntakeError, submit_jsonl
 from backend.ingestion.message_validation import (
     TOPIC_CONVERSATION_TURN,
     TOPIC_LEGACY_NPC_PROFILE,
@@ -25,7 +25,13 @@ from backend.ingestion.tests.canonical_messages import (
     conversation_turn,
     world_snapshot,
 )
-from backend.main import Adapters, Pipeline, PipelineNotReady, build_pipeline
+from backend.main import (
+    Adapters,
+    Pipeline,
+    PipelineNotReady,
+    build_pipeline,
+    replay_jsonl,
+)
 from backend.orchestration.router_handoff import RouterHandoff
 from backend.orchestration.router_port import RoutingResult, RoutingSnapshot
 from backend.orchestration.tests.fake_routers import RecordingRouter

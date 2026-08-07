@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from contextlib import asynccontextmanager
 from dataclasses import dataclass
+from pathlib import Path
 from typing import AsyncIterator
 
 from fastapi import FastAPI
@@ -19,7 +20,8 @@ from backend.context.npc_profiles import NpcProfiles, ProfileDocumentError
 from backend.ingestion import http_intake
 from backend.ingestion.durable_store import DurableStore
 from backend.ingestion.event_store import EventStore
-from backend.ingestion.intake_service import IntakeService
+from backend.ingestion.intake_service import IntakeResult, IntakeService
+from backend.ingestion.jsonl_intake import submit_jsonl
 from backend.ingestion.turn_store import TurnStore
 from backend.ingestion.world_state_store import WorldStateStore
 from backend.models.fallback import FallbackDocumentError, FallbackLibrary
@@ -288,6 +290,19 @@ def create_app(settings: Settings | None = None, adapters: Adapters = Adapters()
     app.state.pipeline = pipeline
     app.include_router(http_intake.router)
     return app
+
+
+async def replay_jsonl(path: Path, pipeline: Pipeline) -> list[IntakeResult]:
+    """Run one JSONL file through the same lifecycle the service runs, and drain it.
+
+    Draining before returning is what makes the outcomes reportable: intake accepts a turn by
+    queueing generation, so a replay that stopped at the intake result would be reporting
+    success over work it was about to throw away.
+    """
+    async with pipeline.running():
+        results = await submit_jsonl(path.read_text().splitlines(), pipeline.intake)
+        await pipeline.drain()
+    return results
 
 
 def _load_profiles(settings: Settings) -> tuple[NpcProfiles, str | None]:

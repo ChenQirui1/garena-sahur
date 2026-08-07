@@ -1,21 +1,19 @@
 """Development JSONL intake over the same application service as HTTP.
 
 Owner: Jerome & Richard
+
+Transport only: reading a file and submitting its records. `docs/team-architecture.md` makes
+`backend/main.py` the module that "connects all Python modules", so composing this adapter with
+a running pipeline happens there and the wiring is never reached back into from here.
 """
 
 from __future__ import annotations
 
-import asyncio
 import json
-import sys
-from pathlib import Path
-from typing import TYPE_CHECKING, Any, Iterable
+from typing import Any, Iterable
 
 from backend.ingestion.intake_service import IntakeOutcome, IntakeResult, IntakeService
 from backend.ingestion.message_validation import TOPIC_LEGACY_NPC_PROFILE
-
-if TYPE_CHECKING:  # Type-only: this import never runs, so the adapter carries no FastAPI.
-    from backend.main import Pipeline
 
 REJECTING_OUTCOMES = frozenset(
     {IntakeOutcome.INVALID, IntakeOutcome.UNKNOWN_TOPIC, IntakeOutcome.STORAGE_UNAVAILABLE}
@@ -66,33 +64,3 @@ def _read_record(line_number: int, line: str) -> tuple[str, dict[str, Any]]:
         raise JsonlIntakeError(line_number, "topic must be a string and message an object")
 
     return record["topic"], record["message"]
-
-
-async def replay_jsonl(path: Path, pipeline: Pipeline) -> list[IntakeResult]:
-    """Run one file through the same pipeline lifecycle the service runs, and drain it.
-
-    Draining before returning is what makes the outcomes reportable: intake accepts a turn by
-    queueing generation, so a replay that stopped at the intake result would be reporting
-    success over work it was about to throw away.
-    """
-    async with pipeline.running():
-        results = await submit_jsonl(path.read_text().splitlines(), pipeline.intake)
-        await pipeline.drain()
-    return results
-
-
-async def _replay(path: Path) -> None:
-    # Imported here so the adapter itself stays free of the FastAPI application wiring.
-    from backend.config import load_settings
-    from backend.main import build_pipeline
-
-    results = await replay_jsonl(path, build_pipeline(load_settings()))
-
-    for outcome in IntakeOutcome:
-        submitted = sum(1 for result in results if result.outcome is outcome)
-        if submitted:
-            print(f"{outcome.value}: {submitted}")
-
-
-if __name__ == "__main__":
-    asyncio.run(_replay(Path(sys.argv[1])))

@@ -6,6 +6,9 @@ The JSONL replay drifted from the HTTP service because each entry point started 
 happened to know about, and the scheduler was added to one of them. A behavioural test cannot
 catch the next stage being forgotten — the forgotten stage is exactly the one nothing asserts on
 — so this reads the source instead and refuses a second start order anywhere.
+
+"Anywhere" covers our scripts as well as our modules: `docs/team-architecture.md` puts execution
+entry points under `scripts/`, which is precisely where a second start order would next appear.
 """
 
 from __future__ import annotations
@@ -77,9 +80,29 @@ def test_the_lifecycle_helper_starts_and_stops_every_stage() -> None:
     }
 
 
+def owned_scripts() -> list[Path]:
+    """Our execution entry points. Another owner's script is read by nobody here.
+
+    Ownership is taken from the module docstring every file in this repository carries, so a
+    script changing hands changes what this asserts instead of quietly disagreeing with it.
+    """
+    return sorted(
+        path
+        for path in (REPO_ROOT / "scripts").glob("*.py")
+        if "Owner: Jerome & Richard" in path.read_text()
+    )
+
+
 def production_sources() -> list[Path]:
-    """The owned modules a deployment runs. A test fixture may still drive one stage alone."""
-    return [MAIN, *(source for source in owned_sources() if "tests" not in source.parts)]
+    """The owned modules and scripts a deployment runs.
+
+    A test fixture may still drive one stage alone; an entry point may not.
+    """
+    return [
+        MAIN,
+        *(source for source in owned_sources() if "tests" not in source.parts),
+        *owned_scripts(),
+    ]
 
 
 def test_no_entry_point_starts_a_stage_outside_the_lifecycle_helper() -> None:
