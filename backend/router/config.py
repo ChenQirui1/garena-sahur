@@ -1,13 +1,19 @@
-"""Configuration for deterministic scoring, tier capacities and hysteresis.
+"""Configuration for deterministic scoring, graph propagation and hysteresis.
 
 Owner: Elson & Daniel
-
-Graph propagation settings are intentionally deferred until that module is implemented.
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+from collections.abc import Mapping
+from dataclasses import dataclass, field
+from math import isfinite
+from types import MappingProxyType
+
+
+def _default_edge_weights() -> dict[str, float]:
+    """Return a fresh copy of the MVP edge-kind weights."""
+    return {"gaze": 1.0}
 
 
 @dataclass(frozen=True, slots=True)
@@ -23,6 +29,11 @@ class RouterConfig:
     event_relevance_weight: float = 0.30
     interaction_recency_weight: float = 0.10
     active_conversation_bonus: float = 10.0
+
+    graph_decay: float = 0.50
+    edge_weights: Mapping[str, float] = field(
+        default_factory=_default_edge_weights
+    )
 
     # Capacity is a maximum rather than a target. A candidate at or below this score remains
     # Ambient unless it is the active conversation target.
@@ -45,16 +56,40 @@ class RouterConfig:
         if self.reactive_hold_ms < 0:
             raise ValueError("reactive_hold_ms must be non-negative")
 
+        # Copy before freezing so a caller cannot mutate the Router through its input mapping.
+        edge_weights = dict(self.edge_weights)
+        finite_graph_values = {
+            "graph_decay": self.graph_decay,
+            **{
+                f"edge_weights[{kind!r}]": weight
+                for kind, weight in edge_weights.items()
+            },
+        }
+        for name, value in finite_graph_values.items():
+            if not isfinite(value):
+                raise ValueError(f"{name} must be finite")
+
         non_negative = {
             "viewport_weight": self.viewport_weight,
             "proximity_weight": self.proximity_weight,
             "event_relevance_weight": self.event_relevance_weight,
             "interaction_recency_weight": self.interaction_recency_weight,
             "active_conversation_bonus": self.active_conversation_bonus,
+            "graph_decay": self.graph_decay,
             "minimum_tier_score": self.minimum_tier_score,
             "focused_sticky_bonus": self.focused_sticky_bonus,
             "reactive_sticky_bonus": self.reactive_sticky_bonus,
+            **{
+                f"edge_weights[{kind!r}]": weight
+                for kind, weight in edge_weights.items()
+            },
         }
         for name, value in non_negative.items():
             if value < 0:
                 raise ValueError(f"{name} must be non-negative")
+
+        object.__setattr__(
+            self,
+            "edge_weights",
+            MappingProxyType(edge_weights),
+        )

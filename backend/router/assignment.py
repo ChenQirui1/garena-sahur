@@ -26,10 +26,18 @@ def assign_tiers(
     config: RouterConfig,
     ranking_scores: Mapping[str, float] | None = None,
     hysteresis_reasons: Mapping[str, str] | None = None,
+    propagated_scores: Mapping[str, float] | None = None,
+    final_scores: Mapping[str, float] | None = None,
+    propagation_reasons: Mapping[str, str] | None = None,
 ) -> tuple[RoutingAssignment, ...]:
     """Rank candidates deterministically, select within caps, and preserve source order."""
-    effective_scores = ranking_scores or {}
+    graph_final_scores = final_scores or {}
+    effective_scores = (
+        ranking_scores if ranking_scores is not None else graph_final_scores
+    )
     sticky_reasons = hysteresis_reasons or {}
+    graph_scores = propagated_scores or {}
+    graph_reasons = propagation_reasons or {}
     ranked = sorted(
         candidates,
         key=lambda candidate: _rank_key(
@@ -44,7 +52,8 @@ def assign_tiers(
         candidate
         for candidate in ranked
         if effective_scores.get(
-            candidate.npc.npc_id, candidate.score.direct_score
+            candidate.npc.npc_id,
+            candidate.score.direct_score,
         )
         > config.minimum_tier_score
         or candidate.npc.npc_id == active_conversation_target
@@ -82,8 +91,12 @@ def assign_tiers(
             selection_reason = "outside Focused and Reactive selection"
 
         previous = previous_tiers.get(npc_id)
+        reasons = candidate.score.reasons
+        propagation_reason = graph_reasons.get(npc_id)
+        if propagation_reason:
+            reasons = (*reasons, propagation_reason)
+        reasons = (*reasons, selection_reason)
         hysteresis_reason = sticky_reasons.get(npc_id)
-        reasons = (*candidate.score.reasons, selection_reason)
         if hysteresis_reason:
             reasons = (*reasons, hysteresis_reason)
         assignments.append(
@@ -93,6 +106,11 @@ def assign_tiers(
                 previous_tier=previous,
                 changed=previous is not None and previous is not tier,
                 reasons=reasons,
+                direct_score=candidate.score.direct_score,
+                propagated_score=graph_scores.get(npc_id, 0.0),
+                final_score=graph_final_scores.get(
+                    npc_id, candidate.score.direct_score
+                ),
             )
         )
 

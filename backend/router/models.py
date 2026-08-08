@@ -22,9 +22,11 @@ from backend.orchestration.router_port import (
     RouterInput,
     RouterPort,
     RoutingAssignment,
+    RoutingDiagnostics,
     RoutingNpc,
     RoutingResult,
     RoutingSnapshot,
+    TierCounts,
 )
 
 __all__ = [
@@ -40,7 +42,9 @@ __all__ = [
     "RouterInput",
     "RouterPort",
     "RoutingAssignment",
+    "RoutingDiagnostics",
     "RoutingNpc",
     "RoutingResult",
     "RoutingSnapshot",
+    "TierCounts",
 ]
