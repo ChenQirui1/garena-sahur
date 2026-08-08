@@ -23,6 +23,7 @@ from typing import TYPE_CHECKING, Annotated, Any, Protocol, cast
 
 from fastapi import APIRouter, Depends, Request, Response, WebSocket, WebSocketDisconnect, status
 
+from backend.ingestion.http_intake import STATUS_FOR_OUTCOME
 from backend.ingestion.intake_service import IntakeOutcome, IntakeResult, IntakeService
 from backend.ingestion.prototype_wire import PrototypeTranslationError, PrototypeWire
 
@@ -32,16 +33,11 @@ if TYPE_CHECKING:
 PUBLISH_PATH = "/api/v1/messages"
 SUBSCRIBE_PATH = "/api/v1/ws"
 
-# `http_intake` owns the canonical mapping; a prototype payload only ever adds one outcome to it.
-STATUS_FOR_OUTCOME = {
-    IntakeOutcome.APPLIED: status.HTTP_202_ACCEPTED,
-    IntakeOutcome.STALE: status.HTTP_200_OK,
-    IntakeOutcome.DUPLICATE: status.HTTP_200_OK,
-    IntakeOutcome.IGNORED: status.HTTP_200_OK,
-    IntakeOutcome.INVALID: status.HTTP_422_UNPROCESSABLE_CONTENT,
-    IntakeOutcome.UNKNOWN_TOPIC: status.HTTP_400_BAD_REQUEST,
-    IntakeOutcome.STORAGE_UNAVAILABLE: status.HTTP_503_SERVICE_UNAVAILABLE,
-}
+# How long one socket may take the bytes. A command is only worth applying inside its own
+# lifetime, and a connection that cannot accept a few hundred bytes in this long is not going to
+# deliver one in time — so a stalled socket is dropped and retried rather than awaited. Without
+# a bound, a half-open mod would hold the publication path open instead of failing it.
+SEND_TIMEOUT_SECONDS = 1.0
 
 
 class NoCommandSubscriber(RuntimeError):
@@ -75,13 +71,15 @@ class CommandSubscribers:
     async def send(self, session_id: str, payload: str) -> int:
         """Deliver to every socket on this session; report how many took it.
 
-        A socket that fails mid-send is dropped rather than retried: the mod reconnects, and a
-        command held for a connection that has gone is a command the next one will not want.
+        A socket that fails or stalls mid-send is dropped rather than awaited: the mod
+        reconnects, and a command held for a connection that has gone is a command the next one
+        will not want.
         """
         delivered = 0
         for connection in list(self._by_session.get(session_id, ())):
             try:
-                await connection.send_text(payload)
+                async with asyncio.timeout(SEND_TIMEOUT_SECONDS):
+                    await connection.send_text(payload)
             except Exception:
                 self.leave(session_id, connection)
             else:

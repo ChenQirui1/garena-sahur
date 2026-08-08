@@ -9,6 +9,7 @@ actually reach, not about the adapter's internals.
 
 from __future__ import annotations
 
+import asyncio
 import json
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
@@ -52,17 +53,35 @@ DOCUMENTED_SECTION = {
     TOPIC_CONVERSATION_TURN: "3. `conversation.turn`",
 }
 
-# Every field name the mod uses that the canonical contract does not. A leak would be rejected
-# downstream by `extra="forbid"`, but only for the payloads some test happens to drive; naming
-# them lets one case say that none of them appears anywhere, at any depth.
-PROTOTYPE_FIELDS = frozenset(
-    {
-        "type", "timestamp", "uuid", "look", "held_item", "name", "profession", "level",
-        "health", "max_health", "activity", "distance", "actor_uuid", "target_uuid",
-        "details", "npc_uuid", "speaker", "speaker_name", "message", "turn_number",
-        "conversation_start",
-    }
-)
+
+def _names_in(payload: object) -> set[str]:
+    """Every key at every depth, so a prototype field cannot hide inside a nested object."""
+    if isinstance(payload, dict):
+        return set(payload) | {
+            name for value in payload.values() for name in _names_in(value)
+        }
+    if isinstance(payload, list):
+        return {name for entry in payload for name in _names_in(entry)}
+    return set()
+
+
+def prototype_field_names() -> frozenset[str]:
+    """Every name the mod uses that the canonical shapes do not, derived from both fixtures.
+
+    Listing them would be a second source of truth: a field the mod grows later would be absent
+    from the list, and the case below would keep passing while no longer covering it.
+    """
+    mods = (
+        _names_in(prototype_messages.world_snapshot())
+        | _names_in(prototype_messages.game_event())
+        | _names_in(prototype_messages.conversation_turn())
+    )
+    ours = (
+        _names_in(canonical_messages.world_snapshot())
+        | _names_in(canonical_messages.game_event())
+        | _names_in(canonical_messages.conversation_turn())
+    )
+    return frozenset(mods - ours)
 
 
 class Bridge(NamedTuple):
@@ -174,20 +193,11 @@ async def test_nothing_prototype_shaped_reaches_the_intake_boundary(
         TOPIC_GAME_EVENT,
         TOPIC_CONVERSATION_TURN,
     ]
+    prototype_only = prototype_field_names()
+    assert prototype_only, "the fixtures no longer differ, so this case proves nothing"
     for topic, message in submitted:
         assert set(message) == documented_keys(DOCUMENTED_SECTION[topic])
-        assert _names_in(message) & PROTOTYPE_FIELDS == set()
-
-
-def _names_in(payload: object) -> set[str]:
-    """Every key at every depth, so a prototype field cannot hide inside a nested object."""
-    if isinstance(payload, dict):
-        return set(payload) | {
-            name for value in payload.values() for name in _names_in(value)
-        }
-    if isinstance(payload, list):
-        return {name for entry in payload for name in _names_in(entry)}
-    return set()
+        assert _names_in(message) & prototype_only == set()
 
 
 async def test_the_envelope_endpoint_is_untouched(bridge: Bridge) -> None:
@@ -216,11 +226,15 @@ async def test_the_bridge_is_absent_unless_configuration_turns_it_on(
 
 
 def test_the_bridge_declares_when_it_retires() -> None:
-    """A temporary layer with no stated end is a permanent one."""
-    docstring = prototype_bridge.__doc__ or ""
+    """A temporary layer with no stated end is a permanent one.
+
+    Pinned because the issue asks for it in those terms: the module docstring must say the
+    adapter is development-only and name #11 as its retirement.
+    """
+    docstring = (prototype_bridge.__doc__ or "").lower()
 
     assert "#11" in docstring
-    assert "evelopment only" in docstring
+    assert "development only" in docstring
 
 
 async def test_a_command_is_delivered_only_to_its_own_session() -> None:
@@ -234,6 +248,18 @@ async def test_a_command_is_delivered_only_to_its_own_session() -> None:
 
     assert mine.sent == [stored.serialized]
     assert theirs.sent == []
+
+
+async def test_a_stalled_socket_is_dropped_rather_than_waited_on() -> None:
+    """A half-open mod must not hold the publication path open; only the command is lost."""
+    subscribers = CommandSubscribers()
+    stalled = _StalledConnection()
+    await subscribers.join(SESSION_ID, stalled)
+
+    with pytest.raises(prototype_bridge.NoCommandSubscriber):
+        await WebSocketCommandPublisher(subscribers).publish(_stored_command())
+
+    assert await subscribers.send(SESSION_ID, "anything") == 0, "the socket was kept"
 
 
 async def test_publication_without_a_subscriber_is_reported_as_a_failure() -> None:
@@ -321,6 +347,13 @@ class _FakeConnection:
 
     async def send_text(self, data: str) -> None:
         self.sent.append(data)
+
+
+class _StalledConnection:
+    """A mod whose socket accepted the connection and then stopped reading."""
+
+    async def send_text(self, data: str) -> None:
+        await asyncio.Event().wait()
 
 
 def _stored_command() -> StoredCommand:

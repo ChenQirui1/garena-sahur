@@ -7,7 +7,7 @@ from __future__ import annotations
 
 from pathlib import Path
 
-from pydantic import Field
+from pydantic import Field, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
 
@@ -87,6 +87,20 @@ class Settings(BaseSettings):
     prototype_world_id: str = "minecraft-overworld"
     prototype_entry_radius_blocks: float = Field(default=24.0, ge=0)
     prototype_exit_radius_blocks: float = Field(default=28.0, ge=0)
+
+    @model_validator(mode="after")
+    def check_prototype_radii_are_orderable(self) -> Settings:
+        """§1 requires the exit radius to exceed the entry radius.
+
+        Enforced here rather than left to intake: transposed radii would otherwise start a
+        service that rejects every snapshot it is sent, which reads as a broken mod.
+        """
+        if self.prototype_exit_radius_blocks <= self.prototype_entry_radius_blocks:
+            raise ValueError(
+                "prototype_exit_radius_blocks must be greater than"
+                " prototype_entry_radius_blocks"
+            )
+        return self
 
 
 def load_settings() -> Settings:

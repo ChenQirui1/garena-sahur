@@ -77,6 +77,14 @@ class TranslatedMessage:
     message: dict[str, Any]
 
 
+@dataclass(frozen=True, slots=True)
+class _Conversation:
+    """Which conversation the mod last announced, and who it is with."""
+
+    conversation_id: str
+    target_npc_id: str
+
+
 @dataclass(slots=True)
 class _Session:
     """The mod's own state, mirrored from what it does publish."""
@@ -84,7 +92,7 @@ class _Session:
     player_id: str | None = None
     player_position: dict[str, float] | None = None
     npc_positions: dict[str, dict[str, float]] = field(default_factory=dict)
-    conversation: tuple[str, str] | None = None
+    conversation: _Conversation | None = None
 
 
 class PrototypeWire:
@@ -182,7 +190,7 @@ class PrototypeWire:
         target_npc_id = _identifier(payload, "npc_uuid")
         speaker_type = _identifier(payload, "speaker")
 
-        session.conversation = (conversation_id, target_npc_id)
+        session.conversation = _Conversation(conversation_id, target_npc_id)
 
         return {
             "schema_version": SCHEMA_VERSION,
@@ -216,25 +224,29 @@ def _active_conversation(
     candidate set therefore suspends the conversation rather than ending it, which is what the
     mod does too: walk back and it is still the one you were having.
     """
-    if session.conversation is None:
+    open_with = session.conversation
+    if open_with is None:
         return None
-    conversation_id, target_npc_id = session.conversation
-    if target_npc_id not in {observation["npc_id"] for observation in observations}:
+    if open_with.target_npc_id not in {
+        observation["npc_id"] for observation in observations
+    }:
         return None
-    return {"conversation_id": conversation_id, "target_npc_id": target_npc_id}
+    return {
+        "conversation_id": open_with.conversation_id,
+        "target_npc_id": open_with.target_npc_id,
+    }
 
 
-def _event_position(
-    session: _Session, target: str | None, actor: str | None
-) -> dict[str, float]:
+def _event_position(session: _Session, target: str | None, actor: str) -> dict[str, float]:
     """Where the event happened, from where its participants were last seen.
 
     Event geometry decides witness membership, so a placeholder here would read as a valid
     event that nobody could have seen. The target is preferred because the mod's own event —
     `villager_attacked` — names the player as the actor and the villager as the target.
     """
-    for participant in (target, actor):
-        if participant is not None and participant in session.npc_positions:
+    named = (target, actor) if target is not None else (actor,)
+    for participant in named:
+        if participant in session.npc_positions:
             return dict(session.npc_positions[participant])
     if session.player_position is not None:
         return dict(session.player_position)
@@ -245,7 +257,12 @@ def _event_position(
 
 
 def _speaker_id(session: _Session, payload: dict[str, Any], speaker_type: str) -> str:
-    """§3 wants a stable identity; the mod sends a display name and, elsewhere, a UUID."""
+    """§3 wants a stable identity; the mod sends a display name and, elsewhere, a UUID.
+
+    A turn that arrives before the session's first snapshot therefore identifies the player
+    differently from every turn after it. That is the cost of not losing the first thing the
+    player said, and the window is one snapshot — 200 ms at the mod's publication rate.
+    """
     if speaker_type == SPEAKER_TYPE_PLAYER and session.player_id is not None:
         return session.player_id
     return _identifier(payload, "speaker_name")
