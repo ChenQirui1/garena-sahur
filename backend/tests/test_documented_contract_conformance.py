@@ -12,7 +12,7 @@ is the reason that matters: its dataclass carries no `schema_version` or `messag
 `as_payload` adds them at serialisation, so comparing the dataclass invents two failures that do
 not exist.
 
-Every delta is declared below with its reason. A fourth appearing is a finding.
+Every delta is declared below with its reason. A sixth appearing is a finding.
 """
 
 from __future__ import annotations
@@ -36,6 +36,7 @@ from backend.ingestion.message_validation import (
 from backend.ingestion.message_validation import (
     ConversationTurn,
     GameEvent,
+    NpcObservation,
     WorldSnapshot,
 )
 from backend.main import build_pipeline
@@ -70,8 +71,15 @@ COMMAND_EXTENSIONS = {"command_sequence"}
 FACT_ENVELOPE = {"schema_version", "record_type"}
 
 # Backend-local state telling an authored persona from the safe generic profile an unknown NPC
-# receives. §8 documents the stored document, and this is never in it.
-PROFILE_LOCAL_FIELDS = {"authored"}
+# receives. §8 documents the stored document, and this is never in it. `profession` is the key a
+# profile is matched on when it describes a role rather than a specific NPC (#58); §8's example
+# names a specific NPC, so it shows only `npc_id`.
+PROFILE_LOCAL_FIELDS = {"authored", "profession"}
+
+# The shipped mod publishes `profession` on every villager it observes and §1 defines no such
+# field. Accepted as an optional provisional extension pending #2, in the same way §6's
+# `command_sequence` is emitted pending #4 — optional, so §1's own example still validates.
+OBSERVATION_EXTENSIONS = {"profession"}
 
 
 def field_names(model: type) -> set[str]:
@@ -140,6 +148,15 @@ def test_the_model_call_fact_carries_every_documented_field_but_the_envelope() -
 
     assert documented - ours == FACT_ENVELOPE, "documented but absent from the fact"
     assert ours - documented == set(), "carried by the fact but undocumented"
+
+
+def test_the_candidate_we_accept_matches_the_documented_observation() -> None:
+    """§1's `npcs[]` entry, which the top-level key comparison above cannot reach."""
+    documented = set(documented_payload(WORLD_SNAPSHOT)["npcs"][0])
+    ours = field_names(NpcObservation)
+
+    assert documented - ours == set(), "documented but absent from NpcObservation"
+    assert ours - documented == OBSERVATION_EXTENSIONS, "undeclared extension on the observation"
 
 
 def test_the_profile_model_matches_the_documented_local_document() -> None:

@@ -97,13 +97,39 @@ def test_the_translated_snapshot_is_a_canonical_snapshot(wire: PrototypeWire) ->
 def test_the_snapshot_carries_the_documented_fields_and_no_prototype_extras(
     wire: PrototypeWire,
 ) -> None:
-    """`profession`, `level`, `health`, `activity`, `distance` and the rest are dropped."""
+    """`level`, `health`, `activity`, `distance` and the rest are dropped. `profession` is not:
+    it is the key a persona is resolved on, and it is carried as the declared extension #58
+    added to the observation."""
     translated = snapshot(wire)
 
     assert set(translated) == documented_keys(WORLD_SNAPSHOT)
     assert set(translated["player"]) == set(canonical_messages.world_snapshot()["player"])
     for observation in translated["npcs"]:
-        assert set(observation) == set(canonical_messages.npc(SHOPKEEPER))
+        assert set(observation) == set(canonical_messages.npc(SHOPKEEPER)) | {"profession"}
+
+
+def test_the_observed_profession_survives_translation(wire: PrototypeWire) -> None:
+    """Without this the demo cannot resolve a persona at all: the mod's UUIDs are world-random,
+    so the profession is the only thing about a villager an authored document can name."""
+    translated = snapshot(wire)
+
+    assert [observation["profession"] for observation in translated["npcs"]] == [
+        "Farmer",
+        "Farmer",
+    ]
+
+
+def test_a_villager_published_without_a_profession_is_still_a_candidate(
+    wire: PrototypeWire,
+) -> None:
+    """The mod always sends one, but nothing in a tracked source obliges it to (#2), and losing
+    a candidate over an absent persona key would be our invention, not its rule."""
+    payload = prototype_messages.world_snapshot()
+    del payload["npcs"][0]["profession"]
+
+    translated = wire.translate(payload)
+
+    assert translated.message["npcs"][0]["profession"] is None
 
 
 def test_the_candidate_count_and_policy_are_synthesized(wire: PrototypeWire) -> None:

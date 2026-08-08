@@ -28,7 +28,9 @@ from backend.context.npc_profiles import NpcProfile, NpcProfiles, Relationship
 from backend.ingestion.durable_store import DurableStore
 from backend.ingestion.event_store import EventStore
 from backend.ingestion.message_validation import (
+    ConversationTurn,
     GameEvent,
+    WorldSnapshot,
     validate_conversation_turn,
     validate_game_event,
     validate_world_snapshot,
@@ -60,6 +62,9 @@ RADII = EventRadii(witness_blocks=12.0, nearby_blocks=24.0)
 
 TRIGGERING_TURN = validate_conversation_turn(conversation_turn(turn_index=20))
 SNAPSHOT = validate_world_snapshot(world_snapshot())
+
+# A world-random Minecraft UUID, which is the only kind a live villager ever carries.
+LIVE_VILLAGER = "6f1b0f14-9c3a-4d2e-8b77-1e5a0c9d4432"
 
 # The turn targets the shopkeeper, so each event below gives it one role and no other: robbed
 # in the theft, merely a bystander to the brawl, and called out to the fire.
@@ -141,6 +146,47 @@ async def _with_history(turns: TurnStore, count: int, words: int = 4) -> None:
 
 def _body(context: GenerationContext, name: str) -> str:
     return next(section.body for section in context.sections if section.name == name)
+
+
+def _professions(tmp_path: Path) -> NpcProfiles:
+    document = tmp_path / "npc_profiles.json"
+    document.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "profiles": [
+                    {
+                        "npc_id": None,
+                        "profession": "farmer",
+                        "name": "Farmer",
+                        "role": "a villager who works the fields",
+                        "persona": "Rises before the market does.",
+                        "speaking_style": "Unhurried.",
+                        "relationships": [],
+                    }
+                ],
+            }
+        )
+    )
+    return NpcProfiles.load(document)
+
+
+def _turn_with(target_npc_id: str) -> ConversationTurn:
+    return validate_conversation_turn(
+        conversation_turn(turn_index=20, target_npc_id=target_npc_id)
+    )
+
+
+def _live_snapshot(profession: str = "Farmer") -> WorldSnapshot:
+    """One villager carrying the identity and profession Minecraft actually publishes."""
+    return validate_world_snapshot(
+        world_snapshot(
+            npcs=[
+                npc(LIVE_VILLAGER, profession=profession),
+                npc(THIEF, world_distance_blocks=11.2),
+            ]
+        )
+    )
 
 
 @pytest_asyncio.fixture
@@ -484,3 +530,46 @@ async def test_a_relationship_falls_back_to_the_raw_id_when_the_profile_is_unkno
     context = await builder.build(AttentionTier.FOCUSED, TRIGGERING_TURN, SNAPSHOT)
 
     assert f'Your relationship to {GUARD} is "relies on".' in _body(context, PROFILE)
+
+
+async def test_a_live_villager_is_given_the_persona_for_the_profession_it_was_observed_with(
+    parts: Parts, tmp_path: Path
+) -> None:
+    """The identifier is a world-random Minecraft UUID no authored document could ever name, so
+    the profession the same snapshot observed is what has to carry the persona."""
+    builder = _builder(parts.turns, parts.events, profiles=_professions(tmp_path))
+
+    context = await builder.build(AttentionTier.FOCUSED, _turn_with(LIVE_VILLAGER), _live_snapshot())
+
+    assert context.npc.authored
+    assert "You are Farmer, a villager who works the fields." in _body(context, PROFILE)
+
+
+async def test_a_reacting_villager_resolves_its_persona_by_profession_too(
+    parts: Parts, tmp_path: Path
+) -> None:
+    """Both paths reach a provider, so a persona reachable from only one of them is half a fix."""
+    builder = _builder(parts.turns, parts.events, profiles=_professions(tmp_path))
+
+    context = await builder.build_for_event(
+        AttentionTier.FOCUSED, THEFT, LIVE_VILLAGER, (ROLE_WITNESS,), _live_snapshot()
+    )
+
+    assert context.npc.authored
+    assert "You are Farmer, a villager who works the fields." in _body(context, PROFILE)
+
+
+async def test_an_unprofiled_profession_still_generates_from_the_generic_persona(
+    parts: Parts, tmp_path: Path
+) -> None:
+    """Degrading to a nameless villager is the specified behaviour; skipping the NPC is not."""
+    builder = _builder(parts.turns, parts.events, profiles=_professions(tmp_path))
+
+    context = await builder.build(
+        AttentionTier.FOCUSED,
+        _turn_with(LIVE_VILLAGER),
+        _live_snapshot(profession="Fletcher"),
+    )
+
+    assert context.npc.authored is False
+    assert _body(context, PROFILE)

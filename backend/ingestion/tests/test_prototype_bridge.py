@@ -28,6 +28,7 @@ from backend.ingestion.message_validation import (
     TOPIC_CONVERSATION_TURN,
     TOPIC_GAME_EVENT,
     TOPIC_WORLD_SNAPSHOT,
+    NpcObservation,
 )
 from backend.ingestion.prototype_bridge import (
     CommandSubscribers,
@@ -66,10 +67,16 @@ def _names_in(payload: object) -> set[str]:
 
 
 def prototype_field_names() -> frozenset[str]:
-    """Every name the mod uses that the canonical shapes do not, derived from both fixtures.
+    """Every name the mod uses that the canonical boundary does not accept, derived rather than
+    listed.
 
     Listing them would be a second source of truth: a field the mod grows later would be absent
     from the list, and the case below would keep passing while no longer covering it.
+
+    The observation's own field names join the canonical fixtures because a name our boundary
+    accepts is not prototype-shaped, whether or not the team's example payload happens to carry
+    it. `profession` is the case in point — §1 omits it, the mod publishes it, and #58 made it a
+    declared optional extension the intake accepts.
     """
     mods = (
         _names_in(prototype_messages.world_snapshot())
@@ -80,6 +87,7 @@ def prototype_field_names() -> frozenset[str]:
         _names_in(canonical_messages.world_snapshot())
         | _names_in(canonical_messages.game_event())
         | _names_in(canonical_messages.conversation_turn())
+        | set(NpcObservation.model_fields)
     )
     return frozenset(mods - ours)
 

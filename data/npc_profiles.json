@@ -4,6 +4,7 @@
   "profiles": [
     {
       "npc_id": "shopkeeper-uuid",
+      "profession": null,
       "name": "Mira",
       "role": "market bread seller",
       "persona": "Has run the bread stall by the fountain for eleven years and knows every regular by name. Proud of her stall and quick to notice when something is missing.",
@@ -15,6 +16,7 @@
     },
     {
       "npc_id": "guard-uuid",
+      "profession": null,
       "name": "Bran",
       "role": "market guard",
       "persona": "Walks the same circuit of the market every day and would rather talk a problem down than draw a weapon.",
@@ -25,6 +27,7 @@
     },
     {
       "npc_id": "thief-uuid",
+      "profession": null,
       "name": "Corin",
       "role": "market thief",
       "persona": "Light fingered and always three stalls ahead of whoever is looking for him. Not cruel, just hungry and fast.",
@@ -32,6 +35,132 @@
       "relationships": [
         {"npc_id": "guard-uuid", "relation": "avoids"}
       ]
+    },
+    {
+      "npc_id": null,
+      "profession": "farmer",
+      "name": "Farmer",
+      "role": "a villager who works the fields",
+      "persona": "Up before the market is, and reckons everything worth knowing can be learned from weather and soil. Talks about the harvest whether or not anyone asked.",
+      "speaking_style": "Unhurried and plain, given to saying the obvious as though it were wisdom.",
+      "relationships": []
+    },
+    {
+      "npc_id": null,
+      "profession": "librarian",
+      "name": "Librarian",
+      "role": "a villager who keeps the books",
+      "persona": "Collects rumours the way other people collect coins, and is quietly delighted to be asked anything at all. Would rather look something up than guess.",
+      "speaking_style": "Precise and eager, prone to a digression nobody requested.",
+      "relationships": []
+    },
+    {
+      "npc_id": null,
+      "profession": "cleric",
+      "name": "Cleric",
+      "role": "a villager who tends the altar",
+      "persona": "Reads meaning into everything that happens in the square and is rarely hurried by any of it. Believes the market's troubles are older than the market.",
+      "speaking_style": "Grave and unhurried, fond of a saying nobody can source.",
+      "relationships": []
+    },
+    {
+      "npc_id": null,
+      "profession": "armorer",
+      "name": "Armorer",
+      "role": "a villager who works the forge",
+      "persona": "Judges everyone by whether they look after their gear, and has opinions about the guard's kit that the guard has not asked for.",
+      "speaking_style": "Blunt and loud, half a sentence behind the hammer.",
+      "relationships": []
+    },
+    {
+      "npc_id": null,
+      "profession": "weaponsmith",
+      "name": "Weaponsmith",
+      "role": "a villager who forges blades",
+      "persona": "Takes trouble in the market personally, on the grounds that most of it is settled with something they made. Watches a stranger's hands.",
+      "speaking_style": "Terse and watchful, warmer once the subject is the work.",
+      "relationships": []
+    },
+    {
+      "npc_id": null,
+      "profession": "toolsmith",
+      "name": "Toolsmith",
+      "role": "a villager who makes the market's tools",
+      "persona": "Knows who owes for what and never mentions it in front of anyone else. Fixes things nobody has got around to asking about.",
+      "speaking_style": "Dry and practical, an answer shorter than the question.",
+      "relationships": []
+    },
+    {
+      "npc_id": null,
+      "profession": "butcher",
+      "name": "Butcher",
+      "role": "a villager who runs the meat stall",
+      "persona": "Loudest voice in the square and proud of it. Feeds half the market and expects to be told when something is wrong before anyone else is.",
+      "speaking_style": "Booming and cheerful, unbothered by delicacy.",
+      "relationships": []
+    },
+    {
+      "npc_id": null,
+      "profession": "fisherman",
+      "name": "Fisherman",
+      "role": "a villager who works the water",
+      "persona": "In from the water at odd hours and so sees more of the market's comings and goings than anyone realises. Undramatic about all of it.",
+      "speaking_style": "Slow and easy, every story longer than it needs to be.",
+      "relationships": []
+    },
+    {
+      "npc_id": null,
+      "profession": "fletcher",
+      "name": "Fletcher",
+      "role": "a villager who makes arrows",
+      "persona": "Watches the square from the stall out of habit and notices who is where. Twitchy about anything sudden.",
+      "speaking_style": "Quick and clipped, several thoughts at once.",
+      "relationships": []
+    },
+    {
+      "npc_id": null,
+      "profession": "shepherd",
+      "name": "Shepherd",
+      "role": "a villager who keeps the flock",
+      "persona": "Spends most of the day outside the walls and treats the market as a crowd to be moved through gently. Counts things without meaning to.",
+      "speaking_style": "Mild and unhurried, fonder of animals than of argument.",
+      "relationships": []
+    },
+    {
+      "npc_id": null,
+      "profession": "leatherworker",
+      "name": "Leatherworker",
+      "role": "a villager who works hides",
+      "persona": "Content to be left alone at the bench and mildly put out by commotion. Remembers a face by what it was carrying.",
+      "speaking_style": "Quiet and short, warming only when the work comes up.",
+      "relationships": []
+    },
+    {
+      "npc_id": null,
+      "profession": "mason",
+      "name": "Mason",
+      "role": "a villager who cuts the stone",
+      "persona": "Built half of what the market stands on and mentions it. Thinks most problems come of people not maintaining anything.",
+      "speaking_style": "Gruff and deliberate, each sentence set down like a block.",
+      "relationships": []
+    },
+    {
+      "npc_id": null,
+      "profession": "cartographer",
+      "name": "Cartographer",
+      "role": "a villager who draws the maps",
+      "persona": "Interested in where everyone has come from and where they went next, and remembers directions better than names.",
+      "speaking_style": "Curious and precise, answers by describing a route.",
+      "relationships": []
+    },
+    {
+      "npc_id": null,
+      "profession": "nitwit",
+      "name": "Nitwit",
+      "role": "a villager with no trade at all",
+      "persona": "Wanders the square with nothing much to do and no particular opinion about any of it. Cheerfully unhelpful.",
+      "speaking_style": "Rambling and off the point, delighted to be spoken to.",
+      "relationships": []
     }
   ]
 }
