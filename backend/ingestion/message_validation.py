@@ -102,6 +102,13 @@ class NpcObservation(CanonicalModel):
     inside_viewport: bool
     line_of_sight: bool
 
+    # A provisional extension, in the sense §6's `command_sequence` is one. The shipped mod
+    # publishes it on every villager (`SnapshotBuilder.buildNpc`) and §1 defines no such field,
+    # so refusing it would reject what Minecraft actually sends. Optional because no source
+    # obliges a publisher to send it, and unconstrained beyond emptiness because none spells it:
+    # the mod's own `formatProfession` renders `tool_smith` as `Tool Smith`. Recorded for #2.
+    profession: NonEmptyText | None = None
+
 
 class AttentionEdge(CanonicalModel):
     """A structural attention relation the backend passes through unweighted."""

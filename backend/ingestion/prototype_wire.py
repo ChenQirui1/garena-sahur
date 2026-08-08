@@ -283,7 +283,13 @@ def _look_direction(look: dict[str, Any]) -> dict[str, float]:
 
 
 def _observation(entry: object) -> dict[str, Any]:
-    """One candidate, keeping only what §1 defines. The mod already publishes four of the six."""
+    """One candidate, keeping what §1 defines and the profession a persona is resolved on.
+
+    The mod already publishes four of the six documented fields, and `profession` besides. That
+    last one is not §1's, but dropping it would leave every villager nameless: the identifiers
+    the mod mints are world-random, so the profession is the only thing about a live villager an
+    authored profile can name.
+    """
     if not isinstance(entry, dict):
         raise PrototypeTranslationError("every entry of `npcs` must be an object")
     return {
@@ -293,6 +299,7 @@ def _observation(entry: object) -> dict[str, Any]:
         "viewport_center_distance": _number(entry, "viewport_center_distance"),
         "inside_viewport": _flag(entry, "inside_viewport"),
         "line_of_sight": _flag(entry, "line_of_sight"),
+        "profession": _optional_identifier(entry, "profession"),
     }
 
 
@@ -323,7 +330,7 @@ def _identifier(payload: dict[str, Any], key: str) -> str:
 
 
 def _optional_identifier(payload: dict[str, Any], key: str) -> str | None:
-    """The mod omits `target_uuid` and `details` rather than sending them null."""
+    """The mod omits `target_uuid`, `details` and the like rather than sending them null."""
     if payload.get(key) is None:
         return None
     return _identifier(payload, key)

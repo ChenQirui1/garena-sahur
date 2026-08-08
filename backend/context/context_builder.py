@@ -86,9 +86,9 @@ class ContextBuilder:
         self, tier: AttentionTier, turn: ConversationTurn, snapshot: WorldSnapshot
     ) -> GenerationContext:
         limits = self._limits[tier]
-        profile = self._profiles.profile_for(turn.target_npc_id)
-        history = await self._history.before(turn, limits.history_turns)
         observed = _observed(snapshot, turn.target_npc_id)
+        profile = self._profiles.profile_for(turn.target_npc_id, _profession(observed))
+        history = await self._history.before(turn, limits.history_turns)
 
         sections = self._fit(
             [
@@ -133,7 +133,8 @@ class ContextBuilder:
         separate relevant-event one, and there is no conversation to draw history from.
         """
         limits = self._limits[tier]
-        profile = self._profiles.profile_for(npc_id)
+        observed = _observed(snapshot, npc_id)
+        profile = self._profiles.profile_for(npc_id, _profession(observed))
         trigger_text = describe_event(event, roles)
 
         sections = self._fit(
@@ -141,9 +142,7 @@ class ContextBuilder:
                 ContextSection(OUTPUT_CONTRACT, _reaction_contract(limits)),
                 ContextSection(TRIGGER, trigger_text),
                 ContextSection(PROFILE, _persona(profile, self._profiles)),
-                ContextSection(
-                    WORLD, _world(_observed(snapshot, npc_id), snapshot.candidate_count)
-                ),
+                ContextSection(WORLD, _world(observed, snapshot.candidate_count)),
             ],
             (),
             limits,
@@ -244,6 +243,15 @@ def _display_name(npc_id: str, profiles: NpcProfiles) -> str:
 
 def _observed(snapshot: WorldSnapshot, npc_id: str) -> NpcObservation | None:
     return next((npc for npc in snapshot.npcs if npc.npc_id == npc_id), None)
+
+
+def _profession(observed: NpcObservation | None) -> str | None:
+    """What this NPC was seen to be, which is what an authored persona can be keyed on.
+
+    An NPC the snapshot has stopped observing still generates — from its own profile if it has
+    one, and from the generic persona otherwise.
+    """
+    return observed.profession if observed is not None else None
 
 
 def _world(observed: NpcObservation | None, candidate_count: int) -> str:

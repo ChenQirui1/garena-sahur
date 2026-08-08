@@ -128,6 +128,20 @@ def test_rejects_unknown_top_level_and_payload_fields() -> None:
         )
 
 
+def test_an_observed_profession_is_accepted_and_its_absence_is_not_an_error() -> None:
+    """`profession` is a provisional extension: the shipped mod publishes it on every villager
+    and §1 does not define it, so we accept it without requiring it (#2)."""
+    with_profession = validate_world_snapshot(
+        world_snapshot(npcs=[npc(SHOPKEEPER, profession="Farmer")], candidate_count=1)
+    )
+    without = validate_world_snapshot(
+        world_snapshot(npcs=[npc(SHOPKEEPER)], candidate_count=1)
+    )
+
+    assert with_profession.npcs[0].profession == "Farmer"
+    assert without.npcs[0].profession is None
+
+
 @pytest.mark.parametrize(
     "overrides",
     [
