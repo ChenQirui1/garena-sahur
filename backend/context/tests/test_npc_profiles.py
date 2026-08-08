@@ -31,6 +31,9 @@ BY_PROFESSION: dict[str, Any] = {
     "relationships": [],
 }
 
+# A profile that names neither a specific NPC nor a profession, so nothing could match it.
+UNKEYED = {key: value for key, value in BY_PROFESSION.items() if key != "profession"}
+
 # What Minecraft actually mints for a villager: a world-random UUID, nothing like the placeholder
 # identifiers the contract documents use in their worked examples.
 LIVE_VILLAGER = "6f1b0f14-9c3a-4d2e-8b77-1e5a0c9d4432"
@@ -134,7 +137,7 @@ def test_the_shipped_document_profiles_the_professions_the_mod_publishes() -> No
             "npc_id or profession",
         ),
         (
-            {"version": 1, "profiles": [{k: v for k, v in BY_PROFESSION.items() if k != "profession"}]},
+            {"version": 1, "profiles": [UNKEYED]},
             "npc_id or profession",
         ),
         (

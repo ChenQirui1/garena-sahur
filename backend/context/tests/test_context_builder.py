@@ -523,7 +523,8 @@ async def test_a_relationship_falls_back_to_the_raw_id_when_the_profile_is_unkno
                 relationships=(Relationship(GUARD, "relies on"),),
                 authored=True,
             )
-        }
+        },
+        {},
     )
     builder = _builder(parts.turns, parts.events, profiles=profiles)
 
@@ -539,7 +540,9 @@ async def test_a_live_villager_is_given_the_persona_for_the_profession_it_was_ob
     the profession the same snapshot observed is what has to carry the persona."""
     builder = _builder(parts.turns, parts.events, profiles=_professions(tmp_path))
 
-    context = await builder.build(AttentionTier.FOCUSED, _turn_with(LIVE_VILLAGER), _live_snapshot())
+    context = await builder.build(
+        AttentionTier.FOCUSED, _turn_with(LIVE_VILLAGER), _live_snapshot()
+    )
 
     assert context.npc.authored
     assert "You are Farmer, a villager who works the fields." in _body(context, PROFILE)

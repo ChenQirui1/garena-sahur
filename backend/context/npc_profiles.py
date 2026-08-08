@@ -43,7 +43,9 @@ class Relationship:
 
 @dataclass(frozen=True, slots=True)
 class NpcProfile:
-    npc_id: str
+    # `None` while a profession persona describes no particular villager. Every profile
+    # `profile_for` hands out names the NPC it was resolved for.
+    npc_id: str | None
     name: str
     role: str
     persona: str
@@ -114,9 +116,9 @@ class _Document(BaseModel):
         if len(set(professions)) != len(professions):
             raise ValueError("profiles must have unique profession values")
 
-        # Relationships stay identity-to-identity. A profession describes a role rather than a
-        # participant, so "wary of the thief" would name a stance towards everyone holding it
-        # rather than a relationship with anyone — see ADR 0013.
+        # Relationships stay identity-to-identity, deliberately: a profession names a
+        # population rather than a participant, so "wary of the thief" authored against one
+        # would assert a stance towards every villager holding it, in every session.
         known = set(npc_ids)
         for profile in self.profiles:
             for relationship in profile.relationships:
@@ -131,14 +133,14 @@ class NpcProfiles:
     """The authored cast, with a safe stand-in for anyone the document does not name."""
 
     def __init__(
-        self, profiles: dict[str, NpcProfile], by_profession: dict[str, NpcProfile] | None = None
+        self, profiles: dict[str, NpcProfile], by_profession: dict[str, NpcProfile]
     ) -> None:
         self._profiles = profiles
-        self._by_profession = by_profession or {}
+        self._by_profession = by_profession
 
     @classmethod
     def empty(cls) -> NpcProfiles:
-        return cls({})
+        return cls({}, {})
 
     @classmethod
     def load(cls, path: Path) -> NpcProfiles:
@@ -149,7 +151,11 @@ class NpcProfiles:
 
         authored = [_authored(profile) for profile in document.profiles]
         return cls(
-            {profile.npc_id: profile for profile in authored if profile.profession is None},
+            {
+                profile.npc_id: profile
+                for profile in authored
+                if profile.npc_id is not None
+            },
             {
                 profession_key(profile.profession): profile
                 for profile in authored
@@ -187,9 +193,7 @@ class NpcProfiles:
 
 def _authored(profile: _Profile) -> NpcProfile:
     return NpcProfile(
-        # A profession profile is bound to an observed NPC when one asks for it; until then it
-        # describes no particular villager.
-        npc_id=profile.npc_id or "",
+        npc_id=profile.npc_id,
         name=profile.name,
         role=profile.role,
         persona=profile.persona,
