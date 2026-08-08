@@ -77,6 +77,17 @@ class Settings(BaseSettings):
     reactive_input_token_limit: int = Field(default=600, gt=0)
     reactive_output_token_limit: int = Field(default=40, gt=0)
 
+    # The development compatibility bridge for the shipped Fabric mod's prototype wire
+    # (`backend/ingestion/prototype_bridge.py`, issue #57). Off here because it is a departure
+    # from the deployment boundary that ADR 0012 records and issue #11 retires; a demo run turns
+    # it on. The three values below are what §1 requires of every snapshot and the mod sends in
+    # none of them: the radii are Ivan's confirmed `SpotlightConfig` constants (#2 A9), and the
+    # world is a single-world stand-in until the mod sends its dimension key (#2 A12).
+    prototype_bridge_enabled: bool = False
+    prototype_world_id: str = "minecraft-overworld"
+    prototype_entry_radius_blocks: float = Field(default=24.0, ge=0)
+    prototype_exit_radius_blocks: float = Field(default=28.0, ge=0)
+
 
 def load_settings() -> Settings:
     return Settings()

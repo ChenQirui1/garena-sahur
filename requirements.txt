@@ -11,6 +11,11 @@ uvicorn==0.52.1
 pydantic==2.13.4
 pydantic-settings==2.14.2
 python-dotenv==1.2.2
+# Uvicorn resolves its WebSocket protocol at startup and falls back to serving none when no
+# implementation is importable, which refuses the mod's command socket with "Unsupported upgrade
+# request". Required by the development bridge in `backend/ingestion/prototype_bridge.py`; the
+# suite does not need it, because Starlette's test client drives WebSocket routes in-process.
+websockets==15.0.1
 
 # Test
 pytest==9.1.1
