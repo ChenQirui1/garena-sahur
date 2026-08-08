@@ -26,7 +26,7 @@ ROLE_RESPONDER = "responder"
 ROLE_WITNESS = "witness"
 ROLE_NEARBY = "nearby"
 
-# The handoff contract's recommended starting table, kept in one place because it says to keep
+# Specification #1's recommended starting table, kept in one place because it asks to keep
 # the values configurable. `unrelated` is absent by design: it is expressed as no roles at all.
 EVENT_RELEVANCE_BY_ROLE = {
     ROLE_ACTOR: 1.0,

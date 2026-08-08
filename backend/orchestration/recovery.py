@@ -78,7 +78,8 @@ class Recovery:
         self._observations = observations
         self._clock = clock
         # What the last run found, kept here so the service lifecycle can start recovery
-        # without the pipeline having to become mutable to hold its result.
+        # without the pipeline having to become mutable to hold its result. Public: it is
+        # this service's outcome-inspection interface, exercised today only by tests.
         self.last = Recovered()
 
     async def run(self) -> Recovered:

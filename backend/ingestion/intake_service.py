@@ -77,6 +77,8 @@ class IntakeService:
         observations: Observations,
         radii: EventRadii,
     ) -> None:
+        # Public: this is the service's store-inspection interface, exercised today only by
+        # tests, not a leak of internals kept private elsewhere.
         self.turns = turns
         self.events = events
         self.conversation = conversation

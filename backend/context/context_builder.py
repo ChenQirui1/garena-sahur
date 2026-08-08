@@ -94,7 +94,7 @@ class ContextBuilder:
             [
                 ContextSection(OUTPUT_CONTRACT, _output_contract(limits)),
                 ContextSection(TRIGGER, _trigger(turn.text)),
-                ContextSection(PROFILE, _persona(profile)),
+                ContextSection(PROFILE, _persona(profile, self._profiles)),
                 ContextSection(
                     EVENT,
                     await self._events.description_for(
@@ -140,7 +140,7 @@ class ContextBuilder:
             [
                 ContextSection(OUTPUT_CONTRACT, _reaction_contract(limits)),
                 ContextSection(TRIGGER, trigger_text),
-                ContextSection(PROFILE, _persona(profile)),
+                ContextSection(PROFILE, _persona(profile, self._profiles)),
                 ContextSection(
                     WORLD, _world(_observed(snapshot, npc_id), snapshot.candidate_count)
                 ),
@@ -223,16 +223,23 @@ def _trigger(text: str) -> str:
     return f'The player says: "{text}"'
 
 
-def _persona(profile: NpcProfile) -> str:
+def _persona(profile: NpcProfile, profiles: NpcProfiles) -> str:
     lines = [
         f"You are {profile.name}, {profile.role}.",
         profile.persona,
         f"Speaking style: {profile.speaking_style}",
     ]
     lines.extend(
-        f"You are {link.relation} {link.npc_id}." for link in profile.relationships
+        f"You are {link.relation} {_display_name(link.npc_id, profiles)}."
+        for link in profile.relationships
     )
     return "\n".join(lines)
+
+
+def _display_name(npc_id: str, profiles: NpcProfiles) -> str:
+    """Resolve a related NPC's name, falling back to its ID when the profile is unknown."""
+    related = profiles.profile_for(npc_id)
+    return related.name if related.authored else npc_id
 
 
 def _observed(snapshot: WorldSnapshot, npc_id: str) -> NpcObservation | None:

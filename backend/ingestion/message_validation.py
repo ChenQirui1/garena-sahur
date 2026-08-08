@@ -2,9 +2,9 @@
 
 Owner: Jerome & Richard
 
-Field names, nesting, and bounds come from the team-sent `world_snapshot` payload and the
-Router handoff contract, never from house style. Where those sources are silent the boundary
-stays open rather than inventing a rule that could reject a legitimate publisher (ADR 0004).
+Field names, nesting, and bounds come from `docs/message_schemas.md`, the field-level
+authority for the wire contract, never from house style. Where that source is silent the
+boundary stays open rather than inventing a rule that could reject a legitimate publisher.
 """
 
 from __future__ import annotations
