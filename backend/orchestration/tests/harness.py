@@ -189,6 +189,12 @@ class Harness:
         return [command for command in self.publisher.published if command.npc_id == npc_id]
 
 
+# Read from configuration rather than restated. A case that hard-codes the lifetime keeps passing
+# while the running service publishes a different one, which is exactly how the 15,000 ms that
+# issue #59 corrected survived unnoticed.
+COMMAND_LIFETIME_MS: int = Settings.model_fields["command_lifetime_ms"].default
+
+
 def settings_for(
     tmp_path: Path,
     profiles: str = PROFILE_DOCUMENT,

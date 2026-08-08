@@ -27,6 +27,7 @@ from typing import Any, Mapping
 
 from backend.models.model_gateway import GeneratedBehaviour, GenerationRequest
 from backend.models.token_estimate import estimate_tokens
+from backend.orchestration.behaviour_command import bounded_dialogue
 
 PROVIDER = "fallback"
 
@@ -105,15 +106,21 @@ class FallbackLibrary:
     def behaviour(
         self, request: GenerationRequest, characters_per_token: int
     ) -> GeneratedBehaviour:
-        """The resolved content as the same normalised result a provider would have returned."""
+        """The resolved content as the same normalised result a provider would have returned.
+
+        Bounded here as well as in the gateway because fallback content never passes through it:
+        an over-long authored line would otherwise reach Minecraft and be dropped, leaving the
+        NPC silent in exactly the case fallback exists to keep it talking.
+        """
         content = self.resolve(request)
+        dialogue = bounded_dialogue(content.dialogue)
         return GeneratedBehaviour(
-            dialogue=content.dialogue,
+            dialogue=dialogue,
             action=None,
             provider=PROVIDER,
             model=content.source,
             input_tokens=request.estimated_input_tokens,
-            output_tokens=estimate_tokens(content.dialogue, characters_per_token),
+            output_tokens=estimate_tokens(dialogue, characters_per_token),
             fallback_used=True,
         )
 

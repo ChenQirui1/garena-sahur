@@ -32,7 +32,12 @@ from backend.orchestration.observations import (
     MISSING_PROFILE,
     UNCONFIRMED_TURN_DISCARDED,
 )
-from backend.orchestration.tests.harness import Harness, running, settings_for
+from backend.orchestration.tests.harness import (
+    COMMAND_LIFETIME_MS,
+    Harness,
+    running,
+    settings_for,
+)
 
 
 def counted(fact: dict[str, object], name: str) -> int:
@@ -67,7 +72,7 @@ async def test_an_active_conversation_and_one_turn_produce_one_command(
     assert command.source_sequence == 1842
     assert command.command_sequence == 1
     assert command.created_at_ms == harness.clock.now_ms()
-    assert command.expires_at_ms == command.created_at_ms + 15_000
+    assert command.expires_at_ms == command.created_at_ms + COMMAND_LIFETIME_MS
     assert command.dialogue
     assert command.command_id and command.request_id
 

@@ -13,6 +13,10 @@ from backend.models.model_gateway import (
     ModelGateway,
     ProviderIdentity,
 )
+from backend.orchestration.behaviour_command import (
+    MAX_DIALOGUE_CHARACTERS,
+    consumer_length,
+)
 from backend.orchestration.clock import AsyncioDeadlines
 from backend.orchestration.router_port import AttentionTier
 
@@ -127,3 +131,59 @@ async def test_a_result_with_neither_dialogue_nor_action_is_refused() -> None:
         ).generate(
             request_for(AttentionTier.FOCUSED)
         )
+
+
+class FixedProvider:
+    """A provider that answers with whatever a case needs to see bounded."""
+
+    def __init__(self, dialogue: str) -> None:
+        self._dialogue = dialogue
+
+    def identity(self, tier: AttentionTier) -> ProviderIdentity:
+        return ProviderIdentity(provider="fixed", model="fixed")
+
+    async def generate(self, request: GenerationRequest) -> GeneratedBehaviour:
+        return GeneratedBehaviour(
+            dialogue=self._dialogue,
+            action=None,
+            provider="fixed",
+            model="fixed",
+            input_tokens=1,
+            output_tokens=1,
+            fallback_used=False,
+        )
+
+
+async def test_a_provider_answer_past_the_dialogue_limit_is_bounded_at_this_seam() -> None:
+    """Every provider result converges on the gateway, so the consumer's bound belongs here.
+
+    An output-token budget does not cover this: 120 tokens is estimated as 480 characters at four
+    per token, but a real provider's 120 tokens routinely run past 512, and Minecraft drops the
+    whole command rather than the overflow.
+    """
+    gateway = ModelGateway(
+        focused=FixedProvider("t" * (MAX_DIALOGUE_CHARACTERS + 200)),
+        reactive=FixedProvider("unused"),
+        deadlines=AsyncioDeadlines(),
+        timeouts_ms=GENEROUS_TIMEOUTS_MS,
+    )
+
+    behaviour = await gateway.generate(request_for(AttentionTier.FOCUSED))
+
+    assert behaviour.dialogue is not None
+    assert consumer_length(behaviour.dialogue) == MAX_DIALOGUE_CHARACTERS
+
+
+async def test_a_provider_answer_inside_the_limit_is_left_exactly_as_it_came() -> None:
+    """The bound must not be a truncation everything quietly passes through."""
+    answer = "t" * MAX_DIALOGUE_CHARACTERS
+    gateway = ModelGateway(
+        focused=FixedProvider(answer),
+        reactive=FixedProvider("unused"),
+        deadlines=AsyncioDeadlines(),
+        timeouts_ms=GENEROUS_TIMEOUTS_MS,
+    )
+
+    behaviour = await gateway.generate(request_for(AttentionTier.FOCUSED))
+
+    assert behaviour.dialogue == answer

@@ -28,6 +28,10 @@ from backend.models.fallback import (
     FallbackLibrary,
 )
 from backend.models.model_gateway import GenerationRequest
+from backend.orchestration.behaviour_command import (
+    MAX_DIALOGUE_CHARACTERS,
+    consumer_length,
+)
 from backend.orchestration.router_port import AttentionTier
 
 CHARACTERS_PER_TOKEN = 4
@@ -312,3 +316,35 @@ def test_a_cache_entry_missing_its_key_is_refused(tmp_path: Path) -> None:
 
     with pytest.raises(FallbackDocumentError):
         library_from(document, tmp_path)
+
+
+def test_an_over_long_authored_line_is_bounded_before_it_becomes_a_command() -> None:
+    """Fallback content never passes through the gateway, so it carries its own bound.
+
+    Without one, an authored line past 512 characters reaches Minecraft, is dropped, and the NPC
+    stays silent — in the one path that exists to keep it talking when generation failed.
+    """
+    library = FallbackLibrary({}, {}, {}, "g" * (MAX_DIALOGUE_CHARACTERS + 100))
+
+    behaviour = library.behaviour(request_for(), CHARACTERS_PER_TOKEN)
+
+    assert behaviour.dialogue is not None
+    assert consumer_length(behaviour.dialogue) == MAX_DIALOGUE_CHARACTERS
+
+
+def test_the_reported_output_tokens_describe_the_bounded_line_not_the_authored_one() -> None:
+    """Telemetry counts what was published. Estimating from the authored line would report
+    tokens for text no NPC ever said."""
+    library = FallbackLibrary({}, {}, {}, "g" * (MAX_DIALOGUE_CHARACTERS + 100))
+
+    behaviour = library.behaviour(request_for(), CHARACTERS_PER_TOKEN)
+
+    assert behaviour.output_tokens == MAX_DIALOGUE_CHARACTERS // CHARACTERS_PER_TOKEN
+
+
+def test_an_authored_line_inside_the_limit_is_left_exactly_as_written() -> None:
+    library = FallbackLibrary({}, {}, {}, GENERIC_DIALOGUE)
+
+    behaviour = library.behaviour(request_for(), CHARACTERS_PER_TOKEN)
+
+    assert behaviour.dialogue == GENERIC_DIALOGUE

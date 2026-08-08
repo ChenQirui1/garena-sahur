@@ -11,7 +11,15 @@ so the work is answered from the fallback library instead.
 
 An **unpublished command** is a generated result that was stored and never delivered. Its bytes
 are already committed, so it is re-sent exactly as it was rather than regenerated — and if its
-15-second lifetime has passed while the process was down, it expires instead.
+lifetime has passed while the process was down, it expires instead.
+
+That lifetime is `command_lifetime_ms`, and it was deliberately shortened from 15 seconds to 10
+(issue #59), which narrows this recovery directly: a process that was down for 12 seconds used to
+find its stored commands still publishable and now finds them expired. The trade is explicit —
+Minecraft keeps an event command-current for 15 seconds from event *publish*, so at the old value
+the tail of an event-triggered command's window fell outside it and a recovered command was
+republished only to be refused as a stale trigger. Fewer commands now survive a restart, and the
+ones that do are actually applied.
 
 Recovery only ever reads, publishes, and closes. It deletes nothing: erasing durable evidence is
 an explicit operation (`session_cleanup`), never a side effect of starting up.

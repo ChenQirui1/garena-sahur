@@ -35,7 +35,12 @@ from backend.orchestration.recovery import UNKNOWN_OUTCOME_ERROR_CODE
 from backend.orchestration.telemetry_port import STATUS_ERROR
 from backend.orchestration.tests.fake_routers import TierScriptRouter
 from backend.orchestration.tests.fakes import ManualClock, RecordingPublisher
-from backend.orchestration.tests.harness import Harness, running, settings_for
+from backend.orchestration.tests.harness import (
+    COMMAND_LIFETIME_MS,
+    Harness,
+    running,
+    settings_for,
+)
 
 
 def conversation_store(harness: Harness) -> ConversationStore:
@@ -250,7 +255,7 @@ async def test_a_command_whose_lifetime_lapsed_while_down_expires_instead(
         assert len(await first.pipeline.commands.unpublished()) == 1
 
     publisher.release()
-    clock.advance(16_000)
+    clock.advance(COMMAND_LIFETIME_MS + 1_000)
 
     async for second in running(settings, publisher=publisher, clock=clock):
         await second.settle()
@@ -363,3 +368,52 @@ async def test_a_redelivered_turn_after_a_restart_buys_no_second_call(
         assert redelivered.status_code == 200
         assert second.provider.started == []
         assert len(publisher.published) == 1
+
+
+async def _downtime_republishes(tmp_path: Path, downtime_ms: int) -> bool:
+    """Take a command down mid-publication, come back `downtime_ms` later, say if it was sent."""
+    settings = settings_for(tmp_path)
+    publisher = RecordingPublisher()
+    clock = ManualClock()
+
+    async for first in running(settings, publisher=publisher, clock=clock):
+        publisher.hold()
+        await first.snapshot(active_conversation=active_conversation())
+        await first.turn()
+        await publisher.wait_for_attempt(1)
+        assert len(await first.pipeline.commands.unpublished()) == 1
+
+    publisher.release()
+    clock.advance(downtime_ms)
+
+    async for second in running(settings, publisher=publisher, clock=clock):
+        await second.settle()
+
+    return publisher.published != []
+
+
+async def test_a_restart_one_millisecond_inside_the_lifetime_still_republishes(
+    tmp_path: Path,
+) -> None:
+    assert await _downtime_republishes(tmp_path, COMMAND_LIFETIME_MS - 1) is True
+
+
+async def test_a_restart_at_the_lifetime_boundary_does_not(tmp_path: Path) -> None:
+    """The consumer rejects at `now >= expires_at_ms`, so the boundary itself is already gone."""
+    assert await _downtime_republishes(tmp_path, COMMAND_LIFETIME_MS) is False
+
+
+async def test_the_recovery_window_is_narrower_than_it_was_before_issue_59(
+    tmp_path: Path,
+) -> None:
+    """This is the cost of the change, stated as a case rather than left in a comment.
+
+    A 12-second outage used to leave a stored command publishable, because the lifetime was
+    15 seconds. It no longer does. That is deliberate: Minecraft keeps an event command-current
+    for 15 seconds from event *publish*, and our command is created seconds later at generation,
+    so at 15 seconds the tail of the retry window fell outside the mod's currency window and a
+    recovered command was republished only to be refused as a stale trigger. Fewer commands
+    survive a restart now, and the ones that do are actually applied.
+    """
+    assert COMMAND_LIFETIME_MS < 15_000, "the lifetime must close inside the mod's window"
+    assert await _downtime_republishes(tmp_path, 12_000) is False
