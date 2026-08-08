@@ -126,8 +126,9 @@ async def test_a_timed_out_attempt_is_reported_as_one_failed_model_call(
         assert len(held.telemetry.model_calls) == 1
         fact = held.telemetry.model_calls[0]
         assert fact.status == STATUS_ERROR
-        # Handoff contract §23: a timeout names the provider it was waiting on, and §21.9 pairs
-        # the failed primary with fallback_used.
+        # `docs/message_schemas.md` §7 allows a null provider only when a request fails before
+        # selection, which a timeout is not, so the attempt names what it was waiting on.
+        # `fallback_used` is true because this failure always delivers fallback content.
         assert fact.provider == PROVIDER
         assert fact.model == MODEL_FOR_TIER[AttentionTier.FOCUSED]
         assert fact.error_code == "MODEL_TIMEOUT"

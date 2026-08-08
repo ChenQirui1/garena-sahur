@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from dataclasses import dataclass
 from pathlib import Path
 from typing import AsyncIterator
@@ -23,7 +24,7 @@ from backend.context.context_builder import (
 from backend.context.trigger_kind import TriggerKind
 from backend.context.conversation_history import ConversationHistory
 from backend.context.event_context import ActiveEvents, describe_event
-from backend.context.npc_profiles import NpcProfiles
+from backend.context.npc_profiles import NpcProfile, NpcProfiles, Relationship
 from backend.ingestion.durable_store import DurableStore
 from backend.ingestion.event_store import EventStore
 from backend.ingestion.message_validation import (
@@ -110,10 +111,13 @@ class Parts:
 
 
 def _builder(
-    turns: TurnStore, events: EventStore, focused: ContextLimits = FOCUSED
+    turns: TurnStore,
+    events: EventStore,
+    focused: ContextLimits = FOCUSED,
+    profiles: NpcProfiles | None = None,
 ) -> ContextBuilder:
     return ContextBuilder(
-        profiles=NpcProfiles.empty(),
+        profiles=profiles if profiles is not None else NpcProfiles.empty(),
         history=ConversationHistory(turns),
         events=ActiveEvents(events, RADII),
         focused=focused,
@@ -413,3 +417,70 @@ async def test_a_reaction_carries_the_event_as_its_trigger_and_not_as_a_separate
 
     assert EVENT not in {section.name for section in context.sections}
     assert _body(context, TRIGGER) == describe_event(THEFT, (ROLE_TARGET,))
+
+
+async def test_a_relationship_names_the_npc_it_points_at(
+    parts: Parts, tmp_path: Path
+) -> None:
+    """A UUID in the persona text tells the model nothing; the counterpart's name does."""
+    document = tmp_path / "npc_profiles.json"
+    document.write_text(
+        json.dumps(
+            {
+                "version": 1,
+                "profiles": [
+                    {
+                        "npc_id": SHOPKEEPER,
+                        "name": "Mira",
+                        "role": "market bread seller",
+                        "persona": "Runs the bread stall by the fountain.",
+                        "speaking_style": "Warm and quick.",
+                        "relationships": [{"npc_id": GUARD, "relation": "relies on"}],
+                    },
+                    {
+                        "npc_id": GUARD,
+                        "name": "Bran",
+                        "role": "market guard",
+                        "persona": "Walks the same circuit every day.",
+                        "speaking_style": "Measured and formal.",
+                        "relationships": [],
+                    },
+                ],
+            }
+        )
+    )
+    builder = _builder(parts.turns, parts.events, profiles=NpcProfiles.load(document))
+
+    context = await builder.build(AttentionTier.FOCUSED, TRIGGERING_TURN, SNAPSHOT)
+
+    assert 'Your relationship to Bran is "relies on".' in _body(context, PROFILE)
+    assert GUARD not in _body(context, PROFILE)
+
+
+async def test_a_relationship_falls_back_to_the_raw_id_when_the_profile_is_unknown(
+    parts: Parts,
+) -> None:
+    """The store is built by hand here because a loaded document cannot reach this branch.
+
+    `_Document.check_profiles_resolve` rejects any relationship naming an NPC the same document
+    does not author, so every counterpart from `NpcProfiles.load` resolves. The fallback exists
+    for a store assembled another way, and renders the ID rather than dropping the relationship.
+    """
+    profiles = NpcProfiles(
+        {
+            SHOPKEEPER: NpcProfile(
+                npc_id=SHOPKEEPER,
+                name="Mira",
+                role="market bread seller",
+                persona="Runs the bread stall by the fountain.",
+                speaking_style="Warm and quick.",
+                relationships=(Relationship(GUARD, "relies on"),),
+                authored=True,
+            )
+        }
+    )
+    builder = _builder(parts.turns, parts.events, profiles=profiles)
+
+    context = await builder.build(AttentionTier.FOCUSED, TRIGGERING_TURN, SNAPSHOT)
+
+    assert f'Your relationship to {GUARD} is "relies on".' in _body(context, PROFILE)

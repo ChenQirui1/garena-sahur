@@ -492,11 +492,11 @@ class GenerationCoordinator:
 
         The provider and model are named. `docs/message_schemas.md` §7 allows them to be null
         only when a request "fails before selection", which a timeout is not: the provider was
-        chosen and called. The team's handoff contract §23 shows both populated on a timeout,
-        and Elson & Daniel's timeout rate is per provider, so nulling them would hide the call.
+        chosen and called. Elson & Daniel's timeout rate is per provider, so nulling them would
+        hide the call.
 
-        `fallback_used` is true because this failure is always followed by fallback content —
-        handoff contract §21.9 asks for exactly that pairing.
+        `fallback_used` is true because this failure is always followed by fallback content, so
+        the record and the delivered dialogue agree.
         """
         timed_out = isinstance(failure, ProviderTimeout)
         self.observations.note(

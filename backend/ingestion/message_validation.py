@@ -2,9 +2,9 @@
 
 Owner: Jerome & Richard
 
-Field names, nesting, and bounds come from the team-sent `world_snapshot` payload and the
-Router handoff contract, never from house style. Where those sources are silent the boundary
-stays open rather than inventing a rule that could reject a legitimate publisher (ADR 0004).
+Field names, nesting, and bounds come from `docs/message_schemas.md`, the field-level
+authority for the wire contract, never from house style. Where that source is silent the
+boundary stays open rather than inventing a rule that could reject a legitimate publisher.
 """
 
 from __future__ import annotations
@@ -150,8 +150,8 @@ class GameEvent(CanonicalModel):
     """One complete-state revision of a durable lifecycle fact about the game world.
 
     Delivery identity (`message_id`) prevents replay; `event_id` and `event_revision` track the
-    occurrence as it changes. The three role arrays may be empty and may overlap: the handoff
-    contract §12.4 expects one NPC to hold several roles at once.
+    occurrence as it changes. The three role arrays may be empty and may overlap:
+    `docs/message_schemas.md` §2 states an NPC may hold more than one role.
     """
 
     schema_version: Literal["1.0"]

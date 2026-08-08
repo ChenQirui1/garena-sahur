@@ -121,8 +121,9 @@ class RouterHandoff:
         newer outcome instead of failing closed.
 
         The same world sequence can still be routed twice — once on snapshot arrival and again
-        when a turn changes the conversation projection. The handoff contract lists both as
-        reasons to call the Router, so the enrichment differs even though the sequence does not.
+        when a turn changes the conversation projection. `docs/message_schemas.md` §4 builds the
+        snapshot from conversation state as well as the world snapshot, so the enrichment differs
+        even though the sequence does not.
         Whether a persistent Router treats the repeat as stale is a question for #3.
         """
         key = (snapshot.session_id, snapshot.world_id)

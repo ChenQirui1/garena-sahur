@@ -120,7 +120,8 @@ async def test_an_invalid_event_is_rejected_before_it_is_stored(
 async def test_a_delivery_identity_reused_for_other_content_is_rejected(
     harness: Harness,
 ) -> None:
-    """§11.2 deduplicates by `message_id`, so one delivery cannot carry two revisions."""
+    """`docs/message_schemas.md` §2 makes `message_id` a unique delivery identity whose
+    duplicates are ignored, so one delivery cannot carry two revisions."""
     await seed(harness)
     await harness.event(revision=1)
     reused = await harness.event(revision=2, status="updated", message_id="event-message-001")

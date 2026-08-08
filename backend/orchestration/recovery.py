@@ -42,10 +42,11 @@ from backend.orchestration.telemetry_port import (
     TelemetryPort,
 )
 
-# The handoff contract's §21.10 vocabulary (`MODEL_TIMEOUT`, `PROVIDER_RATE_LIMIT`,
-# `INVALID_MODEL_RESPONSE`, `REQUEST_CANCELLED_AS_STALE`) has no code for an outcome lost with
-# the process, so this follows its upper-snake convention rather than inventing a new style.
-# It is the one genuinely new code in the backend, and #3 owns confirming it.
+# `docs/message_schemas.md` §7 requires a "stable machine-readable" `error_code` but lists no
+# vocabulary. The codes the backend already uses (`model_gateway.ERROR_CODE_FOR`) have none for
+# an outcome lost with the process, so this follows their upper-snake convention rather than
+# inventing a new style. It is the one genuinely new code in the backend, and #3 owns
+# confirming it.
 UNKNOWN_OUTCOME_ERROR_CODE = "UNKNOWN_PROVIDER_OUTCOME"
 
 
@@ -78,7 +79,8 @@ class Recovery:
         self._observations = observations
         self._clock = clock
         # What the last run found, kept here so the service lifecycle can start recovery
-        # without the pipeline having to become mutable to hold its result.
+        # without the pipeline having to become mutable to hold its result. Public: it is
+        # this service's outcome-inspection interface, exercised today only by tests.
         self.last = Recovered()
 
     async def run(self) -> Recovered:

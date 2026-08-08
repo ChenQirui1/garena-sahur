@@ -1,6 +1,10 @@
-"""Development HTTP intake: one ingestion operation plus routing observation.
+"""Development HTTP intake: ingestion, routing observation, session cleanup, and health checks.
 
 Owner: Jerome & Richard
+
+Registers five routes: `POST /ingest`, `GET /routing/{session_id}/{world_id}`,
+`DELETE /sessions/{session_id}` (the only destructive one), `GET /health/live`, and
+`GET /health/ready`.
 """
 
 from __future__ import annotations

@@ -26,7 +26,7 @@ ROLE_RESPONDER = "responder"
 ROLE_WITNESS = "witness"
 ROLE_NEARBY = "nearby"
 
-# The handoff contract's recommended starting table, kept in one place because it says to keep
+# Specification #1's recommended starting table, kept in one place because it asks to keep
 # the values configurable. `unrelated` is absent by design: it is expressed as no roles at all.
 EVENT_RELEVANCE_BY_ROLE = {
     ROLE_ACTOR: 1.0,
@@ -63,8 +63,8 @@ def witnesses_at_start(
     Called once per event. With no world state yet there are no candidates and the set is
     empty, which is correct and permanent: nothing later can establish who was present.
 
-    Membership is proximity alone. The handoff contract also asks that "the event layer
-    considers it able to perceive the event", but nothing upstream carries that: the snapshot's
+    Membership is proximity alone. Perceiving the event — rather than merely being near it —
+    would be the stronger test, but nothing upstream carries it: the snapshot's
     `line_of_sight` is sight of the *player*, not of the event, and using it here would answer a
     different question. Raised on #2, which owns what Minecraft publishes per event.
     """

@@ -30,8 +30,8 @@ class ModelCallFact:
     request_id: str
     npc_id: str
     tier: str
-    # `null` when the attempt failed before any provider identified itself. Section 22 does
-    # not describe that case; #3 owns how a failed attempt should name its provider.
+    # `null` when the attempt failed before any provider identified itself, which is the only
+    # case `docs/message_schemas.md` §7 allows null for.
     provider: str | None
     model: str | None
     event_id: str | None
