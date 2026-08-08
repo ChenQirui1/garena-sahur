@@ -12,11 +12,13 @@ suite that reads one passes or fails on a file no reviewer can see.
 
 from __future__ import annotations
 
+import os
 from pathlib import Path
 
 import pytest
 
 from backend.config import Settings, default_database_path, load_settings
+from backend.models.tests.test_openai_live import live_key_available
 
 ENV_PREFIX = "SPOTLIGHT_"
 
@@ -207,6 +209,37 @@ def test_the_api_key_is_read_from_the_environment_and_not_repeated_back(
     assert settings.openai_api_key is not None
     assert settings.openai_api_key.get_secret_value() == "sk-not-a-real-key"
     assert "sk-not-a-real-key" not in repr(settings)
+
+
+def test_the_live_test_gate_sees_a_key_that_only_exists_in_dotenv(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """`.env` is the key's documented home, and the live provider test gates on finding it there.
+
+    Gating on `os.environ` instead is what shipped: a checkout with the key in `.env` — exactly
+    what `.env.example` describes, and the only place a value survives between shells — skipped
+    the live test and reported it as having no key. The opt-in path was unusable precisely where
+    it was meant to be used.
+
+    Lives here rather than beside the gate because that module skips itself wholesale, so it
+    cannot host a case about its own skip condition.
+    """
+    monkeypatch.delenv(f"{ENV_PREFIX}OPENAI_API_KEY", raising=False)
+    (tmp_path / ".env").write_text(f"{ENV_PREFIX}OPENAI_API_KEY=sk-only-in-dotenv\n")
+    monkeypatch.chdir(tmp_path)
+
+    assert os.environ.get(f"{ENV_PREFIX}OPENAI_API_KEY") is None, "the key must not be exported"
+    assert live_key_available() is True
+
+
+def test_the_live_test_gate_reports_no_key_when_there_is_none(
+    monkeypatch: pytest.MonkeyPatch, tmp_path: Path
+) -> None:
+    """The case above has to be finding the key, not returning true unconditionally."""
+    monkeypatch.delenv(f"{ENV_PREFIX}OPENAI_API_KEY", raising=False)
+    monkeypatch.chdir(tmp_path)
+
+    assert live_key_available() is False
 
 
 def test_the_api_key_is_absent_by_default() -> None:

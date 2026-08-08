@@ -14,6 +14,7 @@ from __future__ import annotations
 import os
 
 import pytest
+from pydantic import ValidationError
 
 from backend.config import Settings
 from backend.context.trigger_kind import TriggerKind
@@ -27,9 +28,27 @@ from backend.orchestration.router_port import AttentionTier
 OPT_IN = "SPOTLIGHT_OPENAI_LIVE_TEST"
 KEY = "SPOTLIGHT_OPENAI_API_KEY"
 
+
+def live_key_available() -> bool:
+    """Ask `Settings`, not the process environment.
+
+    The key's documented home is `.env` — that is what `.env.example` describes and the only
+    place a value survives between shells. Reading `os.environ` here instead made the gate
+    disagree with the source the test itself loads from, so a correctly configured checkout
+    skipped and reported it as "no key".
+    """
+    try:
+        key = Settings().openai_api_key
+    except ValidationError:
+        return False
+    return key is not None and bool(key.get_secret_value().strip())
+
+
+# The opt-in flag stays an environment variable deliberately: the key is deployment configuration
+# and belongs in `.env`, but spending money has to be asked for on the command line each time.
 pytestmark = pytest.mark.skipif(
-    not (os.environ.get(OPT_IN) and os.environ.get(KEY)),
-    reason=f"live provider test: set {OPT_IN}=1 and {KEY} to run it",
+    not (os.environ.get(OPT_IN) and live_key_available()),
+    reason=f"live provider test: set {OPT_IN}=1 and put {KEY} in the environment or .env",
 )
 
 
