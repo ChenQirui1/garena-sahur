@@ -172,6 +172,37 @@ async def test_each_tier_calls_its_configured_model_with_reasoning_disabled(
     assert body["max_output_tokens"] == output_tokens
 
 
+async def test_a_configured_effort_is_what_reaches_the_provider() -> None:
+    """The disabled default is a setting, so it has to be one the wire actually follows."""
+    exchange = Exchange(always(200, completed_response(usage=USAGE)))
+    provider = OpenAIProvider(
+        model="gpt-5.6-terra",
+        client=provider_over(exchange).client,
+        characters_per_token=4,
+        reasoning_effort="high",
+    )
+
+    await provider.generate(request_for(AttentionTier.FOCUSED))
+
+    assert exchange.bodies[0]["reasoning"] == {"effort": "high"}
+
+
+async def test_an_unset_effort_omits_the_parameter_rather_than_nulling_it() -> None:
+    """Omitting and disabling are different requests; `{"effort": null}` asks for the first while
+    reading as the second, which is why the shipped default is the explicit `none`."""
+    exchange = Exchange(always(200, completed_response(usage=USAGE)))
+    provider = OpenAIProvider(
+        model="gpt-5.6-terra",
+        client=provider_over(exchange).client,
+        characters_per_token=4,
+        reasoning_effort=None,
+    )
+
+    await provider.generate(request_for(AttentionTier.FOCUSED))
+
+    assert "reasoning" not in exchange.bodies[0]
+
+
 async def test_the_rendered_prompt_is_what_is_sent() -> None:
     """The owned renderers produce the whole prompt, so nothing here rewrites or splits it."""
     exchange = Exchange(always(200, completed_response(usage=USAGE)))
@@ -405,6 +436,15 @@ async def test_cancelling_a_call_in_flight_is_not_turned_into_a_provider_failure
 
 
 # ---- how the tiers are configured ------------------------------------------------
+
+
+def test_both_tier_adapters_carry_the_configured_effort() -> None:
+    """Specification #1 disables reasoning on *both* tiers, so neither may miss the setting."""
+    settings = Settings(_env_file=None, reasoning_effort="minimal")  # type: ignore[call-arg]
+    client = openai_client("test-key")
+
+    assert focused_provider(settings, client).reasoning_effort == "minimal"
+    assert reactive_provider(settings, client).reasoning_effort == "minimal"
 
 
 def test_the_tier_adapters_read_their_own_configured_models() -> None:

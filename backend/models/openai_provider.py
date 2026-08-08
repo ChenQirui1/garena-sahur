@@ -19,8 +19,9 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 
-from openai import APIError, APITimeoutError, AsyncOpenAI
+from openai import APIError, APITimeoutError, AsyncOpenAI, Omit, omit
 from openai.types.responses import Response
+from openai.types.shared.reasoning_effort import ReasoningEffort
 from openai.types.shared_params.reasoning import Reasoning
 
 from backend.models.model_gateway import (
@@ -34,11 +35,20 @@ from backend.orchestration.router_port import AttentionTier
 
 PROVIDER = "openai"
 
-# Specification #1: both tiers run "with reasoning disabled". `none` is the SDK's own word for it
-# (`openai.types.shared.reasoning_effort.ReasoningEffort`), so this is the disabled setting rather
-# than the cheapest one. It is a constant because specification #1 excludes reasoning-effort
-# experiments from this sprint; a knob here would be the first one.
-REASONING_DISABLED: Reasoning = {"effort": "none"}
+# Specification #1: both tiers run "with reasoning disabled". `none` is the SDK's own word for it,
+# so this is the disabled setting rather than the cheapest one. The configured effort arrives from
+# `Settings.reasoning_effort`, which ships as exactly this.
+REASONING_DISABLED_EFFORT: ReasoningEffort = "none"
+
+
+def _reasoning(effort: ReasoningEffort) -> Reasoning | Omit:
+    """An unset effort omits the parameter rather than sending a null one.
+
+    Omitting it and disabling it are different requests: the first takes whatever the model does
+    by default, the second states that it does none. Sending `{"effort": null}` would ask for the
+    first while looking like the second.
+    """
+    return omit if effort is None else {"effort": effort}
 
 # Automatic retries are off at the SDK layer, which is the only layer that would otherwise retry
 # without orchestration seeing it: a durable generation claim is spent by the first request, and a
@@ -62,6 +72,7 @@ class OpenAIProvider:
     model: str
     client: AsyncOpenAI
     characters_per_token: int
+    reasoning_effort: ReasoningEffort = REASONING_DISABLED_EFFORT
 
     def identity(self, tier: AttentionTier) -> ProviderIdentity:
         """Who the call is waiting on, answerable before the answer arrives.
@@ -77,7 +88,7 @@ class OpenAIProvider:
                 model=self.model,
                 input=request.prompt,
                 max_output_tokens=request.output_token_limit,
-                reasoning=REASONING_DISABLED,
+                reasoning=_reasoning(self.reasoning_effort),
             )
         except APITimeoutError as expired:
             # Translated rather than passed through so that a slow provider carries the same

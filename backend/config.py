@@ -8,6 +8,7 @@ from __future__ import annotations
 from pathlib import Path
 from typing import Final, Literal
 
+from openai.types.shared.reasoning_effort import ReasoningEffort
 from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
 
@@ -93,11 +94,22 @@ class Settings(BaseSettings):
     # uses the configured OpenAI `gpt-5.6-luna` adapter... These are configuration defaults, not
     # orchestration dependencies." They are settings rather than constants for that reason: a
     # different vendor or model is a deployment change, and nothing outside the two provider
-    # adapters reads them. Reasoning stays disabled in every mode and is deliberately not a knob —
-    # specification #1 puts reasoning-effort experiments outside this sprint.
+    # adapters reads them.
     provider_mode: ProviderMode = PROVIDER_MODE_MOCK
     focused_model: str = "gpt-5.6-terra"
     reactive_model: str = "gpt-5.6-luna"
+
+    # Specification #1 disables reasoning on both tiers, so `none` is what ships and what every
+    # demo runs. It is a setting rather than a constant because `docs/team-architecture.md` makes
+    # this file the home of "model configuration", and because a tier whose latency turns out
+    # wrong at rehearsal should be answerable without a code change.
+    #
+    # The type is the SDK's own, not a copy of its list, so a vocabulary change arrives with the
+    # pinned dependency instead of drifting. `None` omits the parameter and takes whatever the
+    # model does by default — which is *not* the same as disabled, and is why the default here is
+    # the explicit `none` rather than nothing. Specification #1 still rules out sweeping this
+    # value as an experiment; the knob exists to be set once per deployment.
+    reasoning_effort: ReasoningEffort = "none"
 
     # Held as a secret so that a settings repr — an error page, a log line, a debugger — cannot
     # spill it. Absent by default: mock mode never reads it, and live mode without it makes the

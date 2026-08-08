@@ -20,4 +20,5 @@ def reactive_provider(settings: Settings, client: AsyncOpenAI) -> OpenAIProvider
         model=settings.reactive_model,
         client=client,
         characters_per_token=settings.characters_per_token,
+        reasoning_effort=settings.reasoning_effort,
     )

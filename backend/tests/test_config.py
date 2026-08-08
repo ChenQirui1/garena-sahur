@@ -171,6 +171,29 @@ def test_a_shipped_tier_budget_is_the_number_specification_1_fixed(
     assert Settings.model_fields[field].default == specified
 
 
+def test_the_shipped_reasoning_effort_is_disabled() -> None:
+    """Specification #1 disables reasoning on both tiers, so `none` is what ships."""
+    assert Settings.model_fields["reasoning_effort"].default == "none"
+
+
+def test_the_reasoning_effort_is_read_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A tier whose latency turns out wrong at rehearsal is answerable without a code change."""
+    monkeypatch.setenv(f"{ENV_PREFIX}REASONING_EFFORT", "low")
+
+    assert settings_from_environment().reasoning_effort == "low"
+
+
+def test_an_effort_the_sdk_does_not_know_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The vocabulary is the SDK's own type rather than a copy of its list, so a typo fails at
+    load rather than as a 400 in the middle of a demo."""
+    monkeypatch.setenv(f"{ENV_PREFIX}REASONING_EFFORT", "thorough")
+
+    with pytest.raises(ValueError):
+        settings_from_environment()
+
+
 def test_the_api_key_is_read_from_the_environment_and_not_repeated_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:
