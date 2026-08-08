@@ -6,7 +6,7 @@ Owner: Jerome & Richard
 from __future__ import annotations
 
 from contextlib import asynccontextmanager
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from pathlib import Path
 from typing import AsyncIterator
 
@@ -17,11 +17,13 @@ from backend.context.context_builder import ContextBuilder, ContextLimits
 from backend.context.conversation_history import ConversationHistory
 from backend.context.event_context import ActiveEvents
 from backend.context.npc_profiles import NpcProfiles, ProfileDocumentError
-from backend.ingestion import http_intake
+from backend.ingestion import http_intake, prototype_bridge
 from backend.ingestion.durable_store import DurableStore
 from backend.ingestion.event_store import EventStore
 from backend.ingestion.intake_service import IntakeResult, IntakeService
 from backend.ingestion.jsonl_intake import submit_jsonl
+from backend.ingestion.prototype_bridge import CommandSubscribers, WebSocketCommandPublisher
+from backend.ingestion.prototype_wire import PrototypeDefaults, PrototypeWire
 from backend.ingestion.turn_store import TurnStore
 from backend.ingestion.world_state_store import WorldStateStore
 from backend.models.fallback import FallbackDocumentError, FallbackLibrary
@@ -278,6 +280,11 @@ def build_pipeline(settings: Settings, adapters: Adapters = Adapters()) -> Pipel
 
 def create_app(settings: Settings | None = None, adapters: Adapters = Adapters()) -> FastAPI:
     settings = settings or load_settings()
+    subscribers = CommandSubscribers() if settings.prototype_bridge_enabled else None
+    if subscribers is not None and adapters.publisher is None:
+        # The bridge is also where commands leave, so enabling it chooses the publisher too —
+        # unless a caller named one, which is how the owned suites keep their recorder.
+        adapters = replace(adapters, publisher=WebSocketCommandPublisher(subscribers))
     pipeline = build_pipeline(settings, adapters)
 
     @asynccontextmanager
@@ -289,6 +296,16 @@ def create_app(settings: Settings | None = None, adapters: Adapters = Adapters()
     app.state.settings = settings
     app.state.pipeline = pipeline
     app.include_router(http_intake.router)
+    if subscribers is not None:
+        app.state.command_subscribers = subscribers
+        app.state.prototype_wire = PrototypeWire(
+            PrototypeDefaults(
+                world_id=settings.prototype_world_id,
+                entry_radius_blocks=settings.prototype_entry_radius_blocks,
+                exit_radius_blocks=settings.prototype_exit_radius_blocks,
+            )
+        )
+        app.include_router(prototype_bridge.router)
     return app
 
 

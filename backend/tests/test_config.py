@@ -72,6 +72,29 @@ def test_an_out_of_range_environment_value_is_refused(
         settings_from_environment()
 
 
+def test_transposed_prototype_radii_are_refused_at_load(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """`docs/message_schemas.md` §1 requires the exit radius to exceed the entry radius.
+
+    Left to intake, the two values would start a service that rejects every snapshot the mod
+    sends it — a failure that reads as a broken publisher rather than as a broken `.env`.
+    """
+    monkeypatch.setenv(f"{ENV_PREFIX}PROTOTYPE_ENTRY_RADIUS_BLOCKS", "28.0")
+    monkeypatch.setenv(f"{ENV_PREFIX}PROTOTYPE_EXIT_RADIUS_BLOCKS", "24.0")
+
+    with pytest.raises(ValueError, match="prototype_exit_radius_blocks"):
+        settings_from_environment()
+
+
+def test_ordered_prototype_radii_are_accepted(monkeypatch: pytest.MonkeyPatch) -> None:
+    """The case above has to be refusing the order, not the pair of variables."""
+    monkeypatch.setenv(f"{ENV_PREFIX}PROTOTYPE_ENTRY_RADIUS_BLOCKS", "10.0")
+    monkeypatch.setenv(f"{ENV_PREFIX}PROTOTYPE_EXIT_RADIUS_BLOCKS", "12.0")
+
+    assert settings_from_environment().prototype_exit_radius_blocks == 12.0
+
+
 def test_loading_settings_reads_the_environment(monkeypatch: pytest.MonkeyPatch) -> None:
     """`load_settings` is what `main` calls, so the environment has to reach it too."""
     monkeypatch.setenv(f"{ENV_PREFIX}LOG_LEVEL", "debug")
