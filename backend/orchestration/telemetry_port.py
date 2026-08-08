@@ -30,8 +30,8 @@ class ModelCallFact:
     request_id: str
     npc_id: str
     tier: str
-    # `null` when the attempt failed before any provider identified itself, per
-    # `docs/message_schemas.md:397`.
+    # `null` when the attempt failed before any provider identified itself, which is the only
+    # case `docs/message_schemas.md` §7 allows null for.
     provider: str | None
     model: str | None
     event_id: str | None

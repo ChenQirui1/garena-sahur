@@ -68,9 +68,9 @@ class ProviderTimeout(DeadlineExceeded):
     """A provider did not answer inside its tier's budget, and the attempt is spent."""
 
 
-# The team's handoff contract §21.10 gives the error-code vocabulary in upper snake case, and
-# §23's worked timeout example names `MODEL_TIMEOUT`. `docs/message_schemas.md` §7 requires a
-# "stable machine-readable" code but lists none, so these are the team's words, not ours.
+# `docs/message_schemas.md` §7 requires a "stable machine-readable" code but lists no vocabulary.
+# These are the team's agreed words in their upper-snake convention, not ours to invent; #3 owns
+# the vocabulary itself.
 ERROR_CODE_FOR: dict[type[BaseException], str] = {
     ProviderTimeout: "MODEL_TIMEOUT",
     EmptyGeneration: "INVALID_MODEL_RESPONSE",
@@ -89,8 +89,9 @@ def error_code_for(failure: BaseException) -> str:
 class ProviderIdentity:
     """Who would answer a request, knowable without waiting for the answer.
 
-    A timeout still has to name the provider and model it was waiting on — the handoff
-    contract's §23 failure example populates both — so identity cannot live only on a result.
+    A timeout still has to name the provider and model it was waiting on —
+    `docs/message_schemas.md` §7 allows null only when a request fails before selection, which a
+    timeout is not — so identity cannot live only on a result.
     """
 
     provider: str

@@ -45,7 +45,7 @@ class CandidatePolicy(RouterInput):
         return self
 
 
-# The recommended conversation states in the handoff contract.
+# The conversation states `docs/message_schemas.md` §4 names.
 RouterConversationState = Literal["engaged", "awaiting_player", "awaiting_npc", "ending"]
 
 

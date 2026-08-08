@@ -2,10 +2,10 @@
 
 Owner: Jerome & Richard
 
-The shape is fixed by the handoff contract and must not vary between calls, so every documented
-field is present on every build even when the value is empty. What the backend adds to Minecraft's
-raw observation is exactly two per-NPC signals and the list of events that produced them;
-attention edges are carried through untouched because their weight is Router-owned.
+The shape is fixed by `docs/message_schemas.md` §4 and must not vary between calls, so every
+documented field is present on every build even when the value is empty. What the backend adds
+to Minecraft's raw observation is exactly two per-NPC signals and the list of events that
+produced them; attention edges are carried through untouched because their weight is Router-owned.
 """
 
 from __future__ import annotations

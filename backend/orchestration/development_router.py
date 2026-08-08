@@ -2,9 +2,9 @@
 
 Owner: Jerome & Richard
 
-A working Router landed in `backend/router/` (teammate commit `208ed26`), but the owned
-pipeline still runs against a contract fake here rather than calling it directly. This one
-authors no routing:
+A working Router landed in `backend/router/` (teammate commit `208ed26`), but the port itself is
+only frozen by coordination issue #3, so the owned pipeline still runs against a contract fake
+here rather than calling it directly. This one authors no routing:
 Ambient is the tier that requires no decision, so no scoring, propagation, capacity, or
 hysteresis judgement is duplicated outside Elson & Daniel's Router. Issue #10 replaces it.
 """

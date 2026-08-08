@@ -230,7 +230,7 @@ def _persona(profile: NpcProfile, profiles: NpcProfiles) -> str:
         f"Speaking style: {profile.speaking_style}",
     ]
     lines.extend(
-        f"You are {link.relation} {_display_name(link.npc_id, profiles)}."
+        f'Your relationship to {_display_name(link.npc_id, profiles)} is "{link.relation}".'
         for link in profile.relationships
     )
     return "\n".join(lines)

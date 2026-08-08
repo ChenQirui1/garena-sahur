@@ -60,8 +60,8 @@ class Settings(BaseSettings):
     total_concurrency: int = Field(default=8, gt=0)
 
     # Specification #1: witness membership freezes at event start within 12 blocks, and nearby
-    # spans 12 to 24 blocks. Both are configurable because the handoff contract asks for it and
-    # a different scene may need a different scale.
+    # spans 12 to 24 blocks. Both are configurable because it asks for that, and a different
+    # scene may need a different scale.
     witness_radius_blocks: float = Field(default=12.0, ge=0)
     nearby_radius_blocks: float = Field(default=24.0, ge=0)
 

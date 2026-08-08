@@ -150,8 +150,8 @@ class GameEvent(CanonicalModel):
     """One complete-state revision of a durable lifecycle fact about the game world.
 
     Delivery identity (`message_id`) prevents replay; `event_id` and `event_revision` track the
-    occurrence as it changes. The three role arrays may be empty and may overlap: the handoff
-    contract §12.4 expects one NPC to hold several roles at once.
+    occurrence as it changes. The three role arrays may be empty and may overlap:
+    `docs/message_schemas.md` §2 states an NPC may hold more than one role.
     """
 
     schema_version: Literal["1.0"]
