@@ -55,9 +55,14 @@ class Settings(BaseSettings):
     # command's retry window falls outside the mod's currency window and is rejected as a stale
     # trigger, which is exactly the restart-recovery case that window exists to serve.
     #
-    # 10 seconds leaves 5 seconds of headroom: the 4-second Focused provider timeout plus a second
-    # for transport, intake, routing and context. Queue wait is not bounded, so this makes the
-    # window fit in the ordinary case rather than provably in every case. Jerome decided on
+    # 10 seconds leaves 5 seconds of headroom: the 4-second provider timeout plus a second for
+    # transport, intake, routing and context. Queue wait is not bounded, so this makes the window
+    # fit in the ordinary case rather than provably in every case.
+    #
+    # The 4 seconds is the *larger* of the two tier timeouts, not the Focused one specifically.
+    # Issue #66 raised Reactive to the same 4,000 ms, so Reactive-triggered commands now sit at
+    # the same worst-case offset Focused ones always have; the headroom itself did not move.
+    # Whichever tier timeout is raised above 4,000 ms is the one that forces this value down. Jerome decided on
     # 2026-08-08 to shorten ours rather than ask Ivan to widen his (issue #59); the cost is that
     # fewer commands survive a restart, recorded in `orchestration/recovery.py`.
     command_lifetime_ms: int = Field(default=10_000, gt=0)
@@ -65,8 +70,20 @@ class Settings(BaseSettings):
     # Specification #1: Focused calls time out after four seconds and Reactive after two. The
     # provider never sees a retry, here or in its own SDK, so this budget is the whole allowance
     # for one attempt rather than the allowance for a first try.
+    #
+    # Reactive departs from that two seconds, by Jerome's decision on 2026-08-08 (issue #66). The
+    # first live measurements showed the two models have the same latency profile: over 20 calls
+    # each, `gpt-5.6-luna` ran a 1,164 ms median with a 3,830 ms tail against `gpt-5.6-terra`'s
+    # 1,458 ms and 3,468 ms. Reactive is the cheaper model, not a faster one, and its p90 of
+    # 2,261 ms already sat outside a 2,000 ms budget — so roughly one background NPC line in ten
+    # was cached fallback rather than generated dialogue.
+    #
+    # Four seconds costs nothing downstream: `command_lifetime_ms` is derived from the *larger*
+    # tier timeout, and Focused already fixes that at 4,000 ms. Raising Reactive to meet it leaves
+    # the worst case exactly where it was. What it does cost is slot occupancy — see
+    # `reactive_concurrency` below.
     focused_timeout_ms: int = Field(default=4_000, gt=0)
-    reactive_timeout_ms: int = Field(default=2_000, gt=0)
+    reactive_timeout_ms: int = Field(default=4_000, gt=0)
 
     # Specification #1: publication retries occur after approximately 100 ms, 250 ms, 500 ms and
     # 1 second, and may repeat that cadence while the same command is still within its lifetime.
@@ -76,6 +93,11 @@ class Settings(BaseSettings):
     # with eight in total. These bound outbound model calls and are a different quantity from
     # the Router's Focused and Reactive *capacities*, which happen to carry the same numbers
     # and are owned by Elson & Daniel behind the Router port.
+    #
+    # These caps and the tier timeouts multiply: six Reactive slots held for up to 4,000 ms is a
+    # worst-case 1.5 reactions per second, where the old 2,000 ms budget allowed 3. Issue #66
+    # accepted that on the grounds that a slow generated line beats a prompt cached one, and left
+    # the measurement to #13's rehearsal, which is the first run with a real crowd behind it.
     focused_concurrency: int = Field(default=2, gt=0)
     reactive_concurrency: int = Field(default=6, gt=0)
     total_concurrency: int = Field(default=8, gt=0)

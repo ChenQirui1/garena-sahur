@@ -16,6 +16,7 @@ from typing import AsyncIterator
 import pytest
 import pytest_asyncio
 
+from backend.config import Settings
 from backend.ingestion.tests.canonical_messages import (
     SESSION_ID,
     SHOPKEEPER,
@@ -38,8 +39,24 @@ from backend.orchestration.telemetry_port import STATUS_ERROR
 from backend.orchestration.tests.fake_routers import EventAwareRouter
 from backend.orchestration.tests.harness import Harness, running, settings_for
 
-FOCUSED_TIMEOUT_MS = 4_000
-REACTIVE_TIMEOUT_MS = 2_000
+# Deliberately different from each other, and deliberately not the shipped defaults. These two
+# cases prove that a request reaches *its own* tier's budget, and they can only prove it while the
+# two numbers differ — once issue #66 raised Reactive to match Focused at 4,000 ms, asserting the
+# shipped values would have let a gateway that always read one tier pass both cases.
+#
+# The shipped numbers are asserted in `backend/tests/test_config.py`, against `Settings`. Selection
+# and value are separate claims and are now separately tested.
+FOCUSED_TIMEOUT_MS = 4_500
+REACTIVE_TIMEOUT_MS = 1_500
+
+
+def distinct_tier_budgets(tmp_path: Path) -> Settings:
+    """Settings whose two tier budgets cannot be mistaken for each other."""
+    return settings_for(
+        tmp_path,
+        focused_timeout_ms=FOCUSED_TIMEOUT_MS,
+        reactive_timeout_ms=REACTIVE_TIMEOUT_MS,
+    )
 
 
 class BrokenProvider:
@@ -60,7 +77,7 @@ async def harness(tmp_path: Path) -> AsyncIterator[Harness]:
 
 async def test_a_focused_call_is_bounded_by_the_focused_budget(tmp_path: Path) -> None:
     """The budget is asserted by value: a Reactive number here would be a real defect."""
-    async for held in running(settings_for(tmp_path), gated=True):
+    async for held in running(distinct_tier_budgets(tmp_path), gated=True):
         await held.snapshot(active_conversation=active_conversation())
         await held.turn()
         await held.provider.wait_for_started(1)
@@ -73,10 +90,10 @@ async def test_a_focused_call_is_bounded_by_the_focused_budget(tmp_path: Path) -
         assert held.provider.started[0].tier is AttentionTier.FOCUSED
 
 
-async def test_a_reactive_call_is_bounded_by_the_shorter_reactive_budget(
+async def test_a_reactive_call_is_bounded_by_its_own_reactive_budget(
     tmp_path: Path,
 ) -> None:
-    settings = settings_for(tmp_path)
+    settings = distinct_tier_budgets(tmp_path)
     async for held in running(settings, EventAwareRouter(), gated=True):
         # No active conversation, so nothing is Focused and every reaction is Reactive.
         await held.snapshot()
