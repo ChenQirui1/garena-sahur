@@ -251,13 +251,19 @@ async def test_a_command_is_delivered_only_to_its_own_session() -> None:
 
 
 async def test_a_stalled_socket_is_dropped_rather_than_waited_on() -> None:
-    """A half-open mod must not hold the publication path open; only the command is lost."""
+    """A half-open mod must not hold the publication path open; only the command is lost.
+
+    The wait is bounded here as well as in production. Without a bound of its own this case
+    would inherit the very defect it exists to catch: removing the production timeout would
+    hang it rather than fail it, and a hang reaches CI as a run that never finishes.
+    """
     subscribers = CommandSubscribers()
-    stalled = _StalledConnection()
-    await subscribers.join(SESSION_ID, stalled)
+    await subscribers.join(SESSION_ID, _StalledConnection())
+    publisher = WebSocketCommandPublisher(subscribers)
 
     with pytest.raises(prototype_bridge.NoCommandSubscriber):
-        await WebSocketCommandPublisher(subscribers).publish(_stored_command())
+        async with asyncio.timeout(prototype_bridge.SEND_TIMEOUT_SECONDS * 5):
+            await publisher.publish(_stored_command())
 
     assert await subscribers.send(SESSION_ID, "anything") == 0, "the socket was kept"
 
