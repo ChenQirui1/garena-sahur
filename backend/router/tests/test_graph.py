@@ -241,6 +241,14 @@ def test_graph_configuration_is_validated_and_not_accidentally_mutable() -> None
         config.edge_weights["gaze"] = 0.0  # type: ignore[index]
 
 
+@pytest.mark.parametrize("non_finite", [float("nan"), float("inf"), float("-inf")])
+def test_graph_configuration_rejects_non_finite_values(non_finite: float) -> None:
+    with pytest.raises(ValueError, match="graph_decay must be finite"):
+        RouterConfig(graph_decay=non_finite)
+    with pytest.raises(ValueError, match="edge_weights.*must be finite"):
+        RouterConfig(edge_weights={"gaze": non_finite})
+
+
 def test_router_ranks_by_graph_final_score_and_reports_score_evidence() -> None:
     config = RouterConfig(
         focused_capacity=2,

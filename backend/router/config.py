@@ -7,6 +7,7 @@ from __future__ import annotations
 
 from collections.abc import Mapping
 from dataclasses import dataclass, field
+from math import isfinite
 from types import MappingProxyType
 
 
@@ -57,6 +58,17 @@ class RouterConfig:
 
         # Copy before freezing so a caller cannot mutate the Router through its input mapping.
         edge_weights = dict(self.edge_weights)
+        finite_graph_values = {
+            "graph_decay": self.graph_decay,
+            **{
+                f"edge_weights[{kind!r}]": weight
+                for kind, weight in edge_weights.items()
+            },
+        }
+        for name, value in finite_graph_values.items():
+            if not isfinite(value):
+                raise ValueError(f"{name} must be finite")
+
         non_negative = {
             "viewport_weight": self.viewport_weight,
             "proximity_weight": self.proximity_weight,
