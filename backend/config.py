@@ -6,9 +6,18 @@ Owner: Jerome & Richard
 from __future__ import annotations
 
 from pathlib import Path
+from typing import Final, Literal
 
-from pydantic import Field, model_validator
+from openai.types.shared.reasoning_effort import ReasoningEffort
+from pydantic import Field, SecretStr, model_validator
 from pydantic_settings import BaseSettings, SettingsConfigDict
+
+# Which adapter answers a generation request. Mock mode is the default because specification #1
+# requires development and rehearsal not to depend on external model availability, so a live call
+# is something a deployment opts into rather than something it opts out of.
+ProviderMode = Literal["mock", "openai"]
+PROVIDER_MODE_MOCK: Final[ProviderMode] = "mock"
+PROVIDER_MODE_OPENAI: Final[ProviderMode] = "openai"
 
 
 def default_database_path() -> Path:
@@ -80,6 +89,32 @@ class Settings(BaseSettings):
     # No tokenizer dependency is scoped by any issue, so the token ceilings below are enforced
     # against a deterministic character estimate rather than a real encoder.
     characters_per_token: int = Field(default=4, gt=0)
+
+    # Specification #1: "Focused uses the configured OpenAI `gpt-5.6-terra` adapter... Reactive
+    # uses the configured OpenAI `gpt-5.6-luna` adapter... These are configuration defaults, not
+    # orchestration dependencies." They are settings rather than constants for that reason: a
+    # different vendor or model is a deployment change, and nothing outside the two provider
+    # adapters reads them.
+    provider_mode: ProviderMode = PROVIDER_MODE_MOCK
+    focused_model: str = "gpt-5.6-terra"
+    reactive_model: str = "gpt-5.6-luna"
+
+    # Specification #1 disables reasoning on both tiers, so `none` is what ships and what every
+    # demo runs. It is a setting rather than a constant because `docs/team-architecture.md` makes
+    # this file the home of "model configuration", and because a tier whose latency turns out
+    # wrong at rehearsal should be answerable without a code change.
+    #
+    # The type is the SDK's own, not a copy of its list, so a vocabulary change arrives with the
+    # pinned dependency instead of drifting. `None` omits the parameter and takes whatever the
+    # model does by default — which is *not* the same as disabled, and is why the default here is
+    # the explicit `none` rather than nothing. Specification #1 still rules out sweeping this
+    # value as an experiment; the knob exists to be set once per deployment.
+    reasoning_effort: ReasoningEffort = "none"
+
+    # Held as a secret so that a settings repr — an error page, a log line, a debugger — cannot
+    # spill it. Absent by default: mock mode never reads it, and live mode without it makes the
+    # service unready rather than unstartable (`backend/main.py`).
+    openai_api_key: SecretStr | None = None
 
     # Specification #1: these five ceilings are its numbers. Reactive sees only the triggering
     # turn, which is why no Reactive history setting sits beside the Focused one.
