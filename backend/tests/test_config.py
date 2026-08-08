@@ -147,6 +147,30 @@ def test_the_shipped_model_defaults_are_the_specified_ones() -> None:
     assert Settings.model_fields["reactive_model"].default == "gpt-5.6-luna"
 
 
+@pytest.mark.parametrize(
+    ("field", "specified"),
+    [
+        ("focused_input_token_limit", 2_000),
+        ("focused_output_token_limit", 120),
+        ("focused_history_turns", 8),
+        ("focused_timeout_ms", 4_000),
+        ("reactive_input_token_limit", 600),
+        ("reactive_output_token_limit", 40),
+        ("reactive_timeout_ms", 2_000),
+    ],
+)
+def test_a_shipped_tier_budget_is_the_number_specification_1_fixed(
+    field: str, specified: int
+) -> None:
+    """Specification #1 fixes each of these, and issue #12 restates them as criteria.
+
+    They were enforced but unasserted: cases elsewhere pass a budget in or restate it as a
+    literal, so editing a default here moved what the service ships without moving a test. That
+    is exactly how the 15,000 ms command lifetime issue #59 corrected survived unnoticed.
+    """
+    assert Settings.model_fields[field].default == specified
+
+
 def test_the_api_key_is_read_from_the_environment_and_not_repeated_back(
     monkeypatch: pytest.MonkeyPatch,
 ) -> None:

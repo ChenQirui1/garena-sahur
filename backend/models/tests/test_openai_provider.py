@@ -9,12 +9,15 @@ these are part of the ordinary deterministic suite. Live provider evidence is
 
 from __future__ import annotations
 
+import asyncio
 import json
 from typing import Any, Callable
 
 import httpx
 import pytest
 from openai import DefaultAsyncHttpxClient
+
+from backend.orchestration.tests.fakes import ManualDeadlines
 
 from backend.config import Settings
 from backend.context.trigger_kind import TriggerKind
@@ -314,6 +317,91 @@ async def test_malformed_empty_output_is_refused_at_the_gateway() -> None:
 
     with pytest.raises(EmptyGeneration):
         await gateway.generate(request_for(AttentionTier.FOCUSED))
+
+
+async def test_a_truncated_answer_is_a_success_the_same_way_mock_mode_clips() -> None:
+    """A 40-token Reactive budget makes `max_output_tokens` truncation ordinary, not exceptional.
+
+    Mock mode already clips its own dialogue to the output budget and reports success, and the
+    gateway already bounds every answer to what Minecraft accepts. Failing here instead would make
+    the two modes disagree about the same outcome, and would answer a usable — if short — line
+    with a cached one.
+    """
+    body = completed_response(text="East, past the", usage=USAGE)
+    body["status"] = "incomplete"
+    body["incomplete_details"] = {"reason": "max_output_tokens"}
+    exchange = Exchange(always(200, body))
+
+    behaviour = await provider_over(exchange).generate(
+        request_for(AttentionTier.REACTIVE, output_token_limit=40)
+    )
+
+    assert behaviour.dialogue == "East, past the"
+    assert behaviour.fallback_used is False
+
+
+# ---- what the tier budget does to a slow call ------------------------------------
+
+
+class HangingTransport(httpx.AsyncBaseTransport):
+    """A provider that accepts the request and then never answers."""
+
+    def __init__(self) -> None:
+        self.requests: list[httpx.Request] = []
+        self.arrived = asyncio.Event()
+
+    async def handle_async_request(self, request: httpx.Request) -> httpx.Response:
+        self.requests.append(request)
+        self.arrived.set()
+        await asyncio.Event().wait()
+        raise AssertionError("the hanging transport never answers")
+
+
+def hanging() -> tuple[OpenAIProvider, HangingTransport]:
+    transport = HangingTransport()
+    client = openai_client("test-key").with_options(
+        http_client=DefaultAsyncHttpxClient(transport=transport)
+    )
+    return (
+        OpenAIProvider(model="gpt-5.6-terra", client=client, characters_per_token=4),
+        transport,
+    )
+
+
+async def test_the_tier_budget_cuts_off_a_slow_call_and_does_not_reissue_it() -> None:
+    """The gateway's deadline is the real bound on a live call, so it is asserted against a real
+    SDK request in flight rather than against a double that returns promptly."""
+    provider, transport = hanging()
+    deadlines = ManualDeadlines()
+    gateway = ModelGateway(
+        focused=provider,
+        reactive=provider,
+        deadlines=deadlines,
+        timeouts_ms=GENEROUS_TIMEOUTS_MS,
+    )
+    call = asyncio.ensure_future(gateway.generate(request_for(AttentionTier.FOCUSED)))
+    await transport.arrived.wait()
+
+    expired = await deadlines.expire_open()
+
+    assert expired == (4_000,), "a Focused call is bounded by the Focused budget"
+    with pytest.raises(ProviderTimeout):
+        await call
+    assert len(transport.requests) == 1, "an expired attempt is spent, not reissued"
+
+
+async def test_cancelling_a_call_in_flight_is_not_turned_into_a_provider_failure() -> None:
+    """Cancellation is not a failed attempt: orchestration suppresses cancelled work rather than
+    answering it from the fallback library, and it can only do that if the cancellation reaches
+    it. `CancelledError` is a `BaseException`, so nothing on this path may catch it broadly."""
+    provider, transport = hanging()
+    call = asyncio.ensure_future(provider.generate(request_for(AttentionTier.FOCUSED)))
+    await transport.arrived.wait()
+
+    call.cancel()
+
+    with pytest.raises(asyncio.CancelledError):
+        await call
 
 
 # ---- how the tiers are configured ------------------------------------------------

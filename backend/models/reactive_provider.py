@@ -2,10 +2,9 @@
 
 Owner: Jerome & Richard
 
-Specification #1: "Reactive uses the configured OpenAI `gpt-5.6-luna` adapter with reasoning
-disabled." The counterpart of `focused_provider`, and deliberately its mirror image: the two tiers
-differ in which model they name and in nothing else, so any difference that appears between these
-two files is a difference the sources do not ask for.
+The counterpart of `focused_provider`, and deliberately its mirror image: the tiers differ in
+which model they name and in nothing else, so any difference appearing between these two files is
+a difference the sources do not ask for.
 """
 
 from __future__ import annotations
