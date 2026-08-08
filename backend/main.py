@@ -12,7 +12,7 @@ from typing import AsyncIterator
 
 from fastapi import FastAPI
 
-from backend.config import Settings, load_settings
+from backend.config import PROVIDER_MODE_OPENAI, Settings, load_settings
 from backend.context.context_builder import ContextBuilder, ContextLimits
 from backend.context.conversation_history import ConversationHistory
 from backend.context.event_context import ActiveEvents
@@ -27,8 +27,11 @@ from backend.ingestion.prototype_wire import PrototypeDefaults, PrototypeWire
 from backend.ingestion.turn_store import TurnStore
 from backend.ingestion.world_state_store import WorldStateStore
 from backend.models.fallback import FallbackDocumentError, FallbackLibrary
+from backend.models.focused_provider import focused_provider
 from backend.models.mock_provider import MockProvider
 from backend.models.model_gateway import ModelGateway, Provider
+from backend.models.openai_provider import openai_client
+from backend.models.reactive_provider import reactive_provider
 from backend.orchestration.behaviour_publisher import (
     BehaviourPublisher,
     LoggingPublisher,
@@ -152,7 +155,8 @@ def build_pipeline(settings: Settings, adapters: Adapters = Adapters()) -> Pipel
     """Wire one persistent Router and one durable store into one service lifecycle."""
     profiles, profile_error = _load_profiles(settings)
     fallback, fallback_error = _load_fallback(settings)
-    readiness_error = profile_error or fallback_error
+    focused, reactive, provider_error = _providers(settings, adapters.provider)
+    readiness_error = profile_error or fallback_error or provider_error
     clock = adapters.clock or SystemClock()
     deadlines = adapters.deadlines or AsyncioDeadlines()
     store = DurableStore(settings.database_path)
@@ -164,7 +168,6 @@ def build_pipeline(settings: Settings, adapters: Adapters = Adapters()) -> Pipel
     observations = Observations()
     conversation = ConversationManager(ConversationStore(store, observations))
     handoff = RouterHandoff(adapters.router or AmbientOnlyRouter(), observations)
-    provider = adapters.provider or MockProvider(settings.characters_per_token)
     telemetry = adapters.telemetry or LoggingTelemetry()
     publisher = BehaviourPublisher(
         commands=commands,
@@ -216,8 +219,8 @@ def build_pipeline(settings: Settings, adapters: Adapters = Adapters()) -> Pipel
             characters_per_token=settings.characters_per_token,
         ),
         gateway=ModelGateway(
-            focused=provider,
-            reactive=provider,
+            focused=focused,
+            reactive=reactive,
             deadlines=deadlines,
             timeouts_ms={
                 AttentionTier.FOCUSED: settings.focused_timeout_ms,
@@ -320,6 +323,44 @@ async def replay_jsonl(path: Path, pipeline: Pipeline) -> list[IntakeResult]:
         results = await submit_jsonl(path.read_text().splitlines(), pipeline.intake)
         await pipeline.drain()
     return results
+
+
+def _providers(
+    settings: Settings, override: Provider | None
+) -> tuple[Provider, Provider, str | None]:
+    """Who answers each tier, and why the service is unready when live mode has no secret.
+
+    Configuration chooses the adapter; nothing downstream of here knows which one it got. That is
+    what makes the model a deployment decision rather than an orchestration one, and it is why
+    both tiers are resolved in one place instead of at each call site.
+
+    A named adapter wins outright, which is how every owned suite keeps its fake and how the
+    deterministic component evidence stays deterministic.
+
+    A missing key is a readiness failure, not a startup failure: the process still starts, still
+    answers liveness, and still generates deterministically, while `Pipeline.is_ready` refuses the
+    traffic that would otherwise reach a provider that cannot be called. Mock mode never consults
+    the key at all, so a checkout with no secret runs the whole owned pipeline.
+    """
+    if override is not None:
+        return override, override, None
+
+    mock = MockProvider(settings.characters_per_token)
+    if settings.provider_mode != PROVIDER_MODE_OPENAI:
+        return mock, mock, None
+
+    # A blank key counts as missing. Set-but-empty is what an uncommented `.env` line leaves
+    # behind, and passing it through would trade a readiness message an operator can act on for a
+    # 401 in the middle of the demo.
+    key = settings.openai_api_key.get_secret_value() if settings.openai_api_key else ""
+    if not key.strip():
+        return mock, mock, (
+            "SPOTLIGHT_OPENAI_API_KEY is required when SPOTLIGHT_PROVIDER_MODE is"
+            f" {PROVIDER_MODE_OPENAI}"
+        )
+
+    client = openai_client(key)
+    return focused_provider(settings, client), reactive_provider(settings, client), None
 
 
 def _load_profiles(settings: Settings) -> tuple[NpcProfiles, str | None]:

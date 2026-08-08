@@ -111,6 +111,62 @@ def test_the_command_lifetime_is_read_from_the_environment(
     assert settings_from_environment().command_lifetime_ms == 8_000
 
 
+def test_the_provider_mode_is_read_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Live calls are opted into by a deployment, so the switch has to survive parsing."""
+    monkeypatch.setenv(f"{ENV_PREFIX}PROVIDER_MODE", "openai")
+
+    assert settings_from_environment().provider_mode == "openai"
+
+
+def test_an_unknown_provider_mode_is_refused(monkeypatch: pytest.MonkeyPatch) -> None:
+    """A typo must not silently resolve to whichever mode the default happens to be."""
+    monkeypatch.setenv(f"{ENV_PREFIX}PROVIDER_MODE", "anthropic")
+
+    with pytest.raises(ValueError):
+        settings_from_environment()
+
+
+def test_the_model_identifiers_are_read_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Specification #1 calls these configuration defaults, which they only are if a
+    deployment can actually change them without a code change."""
+    monkeypatch.setenv(f"{ENV_PREFIX}FOCUSED_MODEL", "another-strong-model")
+    monkeypatch.setenv(f"{ENV_PREFIX}REACTIVE_MODEL", "another-cheap-model")
+
+    settings = settings_from_environment()
+
+    assert settings.focused_model == "another-strong-model"
+    assert settings.reactive_model == "another-cheap-model"
+
+
+def test_the_shipped_model_defaults_are_the_specified_ones() -> None:
+    assert Settings.model_fields["focused_model"].default == "gpt-5.6-terra"
+    assert Settings.model_fields["reactive_model"].default == "gpt-5.6-luna"
+
+
+def test_the_api_key_is_read_from_the_environment_and_not_repeated_back(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """Held as a secret so an error page, a log line, or a debugger cannot spill it —
+    `docs/message_schemas.md` §8 says never to place provider credentials in payloads, and a
+    settings repr reaches further than a payload does."""
+    monkeypatch.setenv(f"{ENV_PREFIX}OPENAI_API_KEY", "sk-not-a-real-key")
+
+    settings = settings_from_environment()
+
+    assert settings.openai_api_key is not None
+    assert settings.openai_api_key.get_secret_value() == "sk-not-a-real-key"
+    assert "sk-not-a-real-key" not in repr(settings)
+
+
+def test_the_api_key_is_absent_by_default() -> None:
+    """Mock mode never reads it, so an unconfigured checkout runs the whole owned pipeline."""
+    assert Settings.model_fields["openai_api_key"].default is None
+
+
 def test_the_default_command_lifetime_closes_inside_minecrafts_currency_window() -> None:
     """Ivan's `GameEventPublisher.isCurrentEvent` keeps an event command-current for 15,000 ms
     measured from event *publish*; our command is created later, at generation. Equal lengths

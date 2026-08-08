@@ -16,6 +16,10 @@ python-dotenv==1.2.2
 # request". Required by the development bridge in `backend/ingestion/prototype_bridge.py`; the
 # suite does not need it, because Starlette's test client drives WebSocket routes in-process.
 websockets==15.0.1
+# The Focused and Reactive provider adapters (`backend/models/openai_provider.py`). Required in
+# every mode, not only live mode: the deterministic adapter contract tests drive this same client
+# over a stubbed transport, which is what makes them evidence about the client we actually ship.
+openai==2.53.0
 
 # Test
 pytest==9.1.1
