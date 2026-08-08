@@ -158,7 +158,10 @@ def test_the_shipped_model_defaults_are_the_specified_ones() -> None:
         ("focused_timeout_ms", 4_000),
         ("reactive_input_token_limit", 600),
         ("reactive_output_token_limit", 40),
-        ("reactive_timeout_ms", 2_000),
+        # Issue #66 raised this from specification #1's two seconds; see the derivation in
+        # `backend/config.py`. It is listed here rather than dropped, because the value being a
+        # deliberate departure is exactly why it needs pinning.
+        ("reactive_timeout_ms", 4_000),
     ],
 )
 def test_a_shipped_tier_budget_is_the_number_specification_1_fixed(
@@ -261,3 +264,22 @@ def test_the_default_command_lifetime_closes_inside_minecrafts_currency_window()
 
     assert lifetime < MINECRAFT_EVENT_CURRENCY_WINDOW_MS
     assert MINECRAFT_EVENT_CURRENCY_WINDOW_MS - lifetime > FOCUSED_TIMEOUT_MS
+
+
+def test_the_command_lifetime_headroom_covers_the_slowest_tier_not_just_focused() -> None:
+    """The headroom is set by whichever tier waits longest, which is not always Focused.
+
+    Issue #66 raised Reactive from 2,000 ms to match Focused's 4,000 ms. That was free precisely
+    because Focused already fixed the worst case — but the derivation comment named Focused
+    rather than the maximum, so a future change to either tier alone could walk past the window
+    while the Focused-only assertion above still passed.
+    """
+    MINECRAFT_EVENT_CURRENCY_WINDOW_MS = 15_000
+    slowest_tier_ms = max(
+        Settings.model_fields["focused_timeout_ms"].default,
+        Settings.model_fields["reactive_timeout_ms"].default,
+    )
+
+    lifetime = Settings.model_fields["command_lifetime_ms"].default
+
+    assert MINECRAFT_EVENT_CURRENCY_WINDOW_MS - lifetime > slowest_tier_ms
