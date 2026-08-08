@@ -1,4 +1,16 @@
 {
-  "_comment": "Live visualisation of routing and costs.",
-  "_owner": "Elson & Daniel"
+  "name": "spotlight-observability-dashboard",
+  "version": "1.0.0",
+  "private": true,
+  "description": "Dependency-free, read-only dashboard for Spotlight routing and cost telemetry.",
+  "type": "module",
+  "scripts": {
+    "build": "node ./scripts/build.mjs",
+    "test": "node --test ./tests/*.test.js",
+    "check": "npm run test && npm run build",
+    "preview": "npm run build && node ./scripts/serve.mjs"
+  },
+  "engines": {
+    "node": ">=20"
+  }
 }

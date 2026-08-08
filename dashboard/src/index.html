@@ -1,0 +1,253 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <meta name="color-scheme" content="dark" />
+    <meta
+      name="description"
+      content="Read-only observability for Spotlight NPC attention routing, model calls, cost, and benchmarks."
+    />
+    <meta property="og:type" content="website" />
+    <meta property="og:title" content="Spotlight · Attention control room" />
+    <meta
+      property="og:description"
+      content="See which NPCs receive model attention, why their tier changed, and what each run costs."
+    />
+    <meta property="og:image" content="./og.png" />
+    <meta name="twitter:card" content="summary_large_image" />
+    <meta name="twitter:title" content="Spotlight · Attention control room" />
+    <meta
+      name="twitter:description"
+      content="See which NPCs receive model attention, why their tier changed, and what each run costs."
+    />
+    <meta name="twitter:image" content="./og.png" />
+    <title>Spotlight · Observability</title>
+    <link rel="stylesheet" href="./styles.css" />
+  </head>
+  <body>
+    <a class="skip-link" href="#main-content">Skip to dashboard</a>
+
+    <header class="topbar">
+      <div class="brand-lockup">
+        <div class="brand-mark" aria-hidden="true"><span></span></div>
+        <div>
+          <p class="eyebrow">Spotlight · local observability</p>
+          <h1>Attention control room</h1>
+          <p class="lede">
+            See which NPCs receive model attention, why their tier changed, and what each run costs.
+          </p>
+        </div>
+      </div>
+
+      <div class="data-controls" aria-label="Dashboard data controls">
+        <div class="source-state">
+          <span id="source-dot" class="source-dot" aria-hidden="true"></span>
+          <span id="data-status" role="status" aria-live="polite">Loading dashboard data…</span>
+        </div>
+        <div class="button-row">
+          <button id="refresh-button" class="button button-secondary" type="button">
+            Refresh generated data
+          </button>
+          <label class="button button-primary" for="file-picker">Choose JSON file</label>
+          <input id="file-picker" class="visually-hidden" type="file" accept="application/json,.json" />
+        </div>
+        <p id="updated-at" class="updated-at">No payload loaded</p>
+      </div>
+    </header>
+
+    <main id="main-content" tabindex="-1">
+      <div id="error-banner" class="notice notice-error" role="alert" hidden></div>
+
+      <section class="section" aria-labelledby="overview-title">
+        <div class="section-heading">
+          <div>
+            <p class="section-kicker">Now</p>
+            <h2 id="overview-title">Routing overview</h2>
+          </div>
+          <p id="routing-context" class="section-note">Waiting for a current routing result.</p>
+        </div>
+
+        <div class="overview-grid">
+          <article class="candidate-card panel">
+            <p class="metric-label">Current candidates</p>
+            <p id="candidate-count" class="hero-value">—</p>
+            <p class="metric-note">NPCs inside the router’s candidate set</p>
+            <dl class="micro-stats">
+              <div>
+                <dt>Router time</dt>
+                <dd id="routing-time">Not recorded</dd>
+              </div>
+              <div>
+                <dt>Tier switches</dt>
+                <dd id="tier-switches">Not recorded</dd>
+              </div>
+            </dl>
+          </article>
+          <div id="tier-cards" class="tier-grid" aria-label="Tier counts and capacities"></div>
+        </div>
+
+        <div class="metrics-grid" aria-label="Model health summary">
+          <article class="metric-card panel">
+            <p class="metric-label">Model calls</p>
+            <p id="model-call-count" class="metric-value">—</p>
+            <p class="metric-note">Recorded provider attempts</p>
+          </article>
+          <article class="metric-card panel">
+            <p class="metric-label">Median latency</p>
+            <p id="median-latency" class="metric-value">—</p>
+            <p class="metric-note">Typical completed model call</p>
+          </article>
+          <article class="metric-card panel">
+            <p class="metric-label">p95 latency</p>
+            <p id="p95-latency" class="metric-value">—</p>
+            <p class="metric-note">Slow-tail model response</p>
+          </article>
+          <article class="metric-card panel">
+            <p class="metric-label">Fallbacks</p>
+            <p id="fallback-count" class="metric-value">—</p>
+            <p id="fallback-note" class="metric-note">No model calls recorded</p>
+          </article>
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="cost-title">
+        <div class="section-heading">
+          <div>
+            <p class="section-kicker">Spend</p>
+            <h2 id="cost-title">Cost evidence</h2>
+          </div>
+          <p class="section-note">Routed spend and the all-strong-model comparison stay separate.</p>
+        </div>
+        <div id="cost-cards" class="cost-grid"></div>
+      </section>
+
+      <section class="section" aria-labelledby="routing-title">
+        <div class="section-heading section-heading-wrap">
+          <div>
+            <p class="section-kicker">Decision trace</p>
+            <h2 id="routing-title">Current NPC routing</h2>
+          </div>
+          <div class="table-tools" aria-label="Routing filters">
+            <label>
+              <span>Find NPC</span>
+              <input id="routing-search" type="search" placeholder="Name or ID" autocomplete="off" />
+            </label>
+            <label>
+              <span>Tier</span>
+              <select id="tier-filter">
+                <option value="all">All tiers</option>
+                <option value="focused">Focused</option>
+                <option value="reactive">Reactive</option>
+                <option value="ambient">Ambient</option>
+              </select>
+            </label>
+          </div>
+        </div>
+
+        <div class="routing-layout">
+          <div class="table-panel panel">
+            <div class="table-scroll">
+              <table>
+                <caption class="visually-hidden">
+                  Current routing assignments. Choose an NPC to inspect its complete decision trace.
+                </caption>
+                <thead>
+                  <tr>
+                    <th scope="col">NPC</th>
+                    <th scope="col">Current tier</th>
+                    <th scope="col">Previous</th>
+                    <th scope="col" class="numeric">Direct</th>
+                    <th scope="col" class="numeric">Propagated</th>
+                    <th scope="col" class="numeric">Final</th>
+                    <th scope="col">Changed</th>
+                    <th scope="col">Reasons</th>
+                  </tr>
+                </thead>
+                <tbody id="routing-table-body"></tbody>
+              </table>
+            </div>
+            <p id="routing-empty" class="empty-state" hidden>No routing assignments match these filters.</p>
+          </div>
+
+          <aside id="npc-detail" class="detail-panel panel" aria-labelledby="npc-detail-title">
+            <p class="section-kicker">Selected NPC</p>
+            <h3 id="npc-detail-title">No NPC selected</h3>
+            <p class="detail-empty">Choose an NPC in the routing table to inspect its scores and reasons.</p>
+          </aside>
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="calls-title">
+        <div class="section-heading">
+          <div>
+            <p class="section-kicker">Provider activity</p>
+            <h2 id="calls-title">Recent model calls</h2>
+          </div>
+          <p class="section-note">Newest attempts first; failures remain visible.</p>
+        </div>
+        <div class="table-panel panel">
+          <div class="table-scroll">
+            <table>
+              <caption class="visually-hidden">The twelve most recent recorded model-call attempts.</caption>
+              <thead>
+                <tr>
+                  <th scope="col">Completed</th>
+                  <th scope="col">NPC</th>
+                  <th scope="col">Tier</th>
+                  <th scope="col">Provider / model</th>
+                  <th scope="col" class="numeric">Latency</th>
+                  <th scope="col" class="numeric">Tokens</th>
+                  <th scope="col">Outcome</th>
+                </tr>
+              </thead>
+              <tbody id="calls-table-body"></tbody>
+            </table>
+          </div>
+          <p id="calls-empty" class="empty-state" hidden>No model-call facts are present in this payload.</p>
+        </div>
+      </section>
+
+      <section class="section" aria-labelledby="benchmarks-title">
+        <div class="section-heading">
+          <div>
+            <p class="section-kicker">Repeatable scale test</p>
+            <h2 id="benchmarks-title">10 / 25 / 50 / 100 NPC comparison</h2>
+          </div>
+          <p class="section-note">Each row comes from a saved run; absent sizes are marked awaiting run.</p>
+        </div>
+        <div id="benchmark-chart" class="benchmark-grid" aria-label="Benchmark cost comparison"></div>
+        <div class="table-panel panel benchmark-table-panel">
+          <div class="table-scroll">
+            <table>
+              <caption class="visually-hidden">Metrics for the required benchmark NPC counts.</caption>
+              <thead>
+                <tr>
+                  <th scope="col">NPCs</th>
+                  <th scope="col" class="numeric">Calls</th>
+                  <th scope="col" class="numeric">Tokens</th>
+                  <th scope="col" class="numeric">Median</th>
+                  <th scope="col" class="numeric">p95</th>
+                  <th scope="col" class="numeric">Fallbacks</th>
+                  <th scope="col" class="numeric">Routed cost</th>
+                  <th scope="col" class="numeric">Projected baseline</th>
+                  <th scope="col" class="numeric">Savings</th>
+                </tr>
+              </thead>
+              <tbody id="benchmark-table-body"></tbody>
+            </table>
+          </div>
+        </div>
+      </section>
+
+      <footer>
+        <p>Read-only telemetry · local files stay in this browser tab · missing values are never counted as zero</p>
+      </footer>
+    </main>
+
+    <noscript>
+      <div class="noscript">This dashboard needs JavaScript to read and display the telemetry JSON.</div>
+    </noscript>
+    <script type="module" src="./app.js"></script>
+  </body>
+</html>
