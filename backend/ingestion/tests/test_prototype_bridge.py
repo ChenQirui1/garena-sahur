@@ -10,6 +10,7 @@ actually reach, not about the adapter's internals.
 from __future__ import annotations
 
 import json
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import Any, AsyncIterator, NamedTuple
 
@@ -276,6 +277,20 @@ async def test_a_command_with_no_subscriber_expires_without_failing_orchestratio
     assert expired, "no command was generated, so nothing proves the absent subscriber"
 
 
+def _received_within(subscriber: Any, seconds: float) -> Any:
+    """Read one message, failing rather than waiting forever if none is coming.
+
+    The test client's socket has no receive timeout, so a bridge that stops delivering would
+    hang this case instead of failing it — which is how a broken delivery reaches CI as a run
+    that never finishes rather than a red one. Closing the socket releases the worker.
+    """
+    pool = ThreadPoolExecutor(max_workers=1)
+    try:
+        return pool.submit(subscriber.receive_json).result(timeout=seconds)
+    finally:
+        pool.shutdown(wait=False)
+
+
 def test_a_connected_mod_receives_the_behaviour_command(tmp_path: Path) -> None:
     """The whole demo path: prototype snapshot, prototype turn, command back over the socket."""
     app = app_for(bridge_settings(tmp_path), RecordingRouter())
@@ -288,7 +303,7 @@ def test_a_connected_mod_receives_the_behaviour_command(tmp_path: Path) -> None:
             ):
                 assert client.post(PUBLISH, json=published).status_code == 202
 
-            command = subscriber.receive_json()
+            command = _received_within(subscriber, seconds=10.0)
 
     assert command["message_type"] == "behaviour_command"
     assert command["session_id"] == SESSION_ID
