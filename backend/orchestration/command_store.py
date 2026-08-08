@@ -10,6 +10,9 @@ The command is serialized once, at the moment it is stored, and every later atte
 that same string. Re-serializing per attempt would look identical today and stop being identical
 the first time a field's rendering changes, which is exactly the guarantee Minecraft is being
 promised: a retry is the same command, not an equivalent one.
+
+Serializing is also where the payload's size is settled, so a command too large for the consumer
+raises before the insert rather than becoming a stored row a later restart would republish.
 """
 
 from __future__ import annotations
@@ -19,7 +22,7 @@ from dataclasses import dataclass
 from typing import Any
 
 from backend.ingestion.durable_store import DurableStore
-from backend.orchestration.behaviour_command import BehaviourCommand
+from backend.orchestration.behaviour_command import BehaviourCommand, serialized_payload
 
 PENDING = "pending"
 PUBLISHED = "published"
@@ -48,7 +51,7 @@ class CommandStore:
 
     async def store(self, command: BehaviourCommand) -> StoredCommand:
         """Commit one command. A clash of identity or sequence raises rather than vanishing."""
-        serialized = json.dumps(command.as_payload())
+        serialized = serialized_payload(command)
         connection = self._store.connection
         await connection.execute(
             "INSERT INTO behaviour_commands"

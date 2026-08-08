@@ -100,3 +100,28 @@ def test_loading_settings_reads_the_environment(monkeypatch: pytest.MonkeyPatch)
     monkeypatch.setenv(f"{ENV_PREFIX}LOG_LEVEL", "debug")
 
     assert load_settings().log_level == "debug"
+
+
+def test_the_command_lifetime_is_read_from_the_environment(
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    """A demo host may need a different value, so it has to be a knob rather than a constant."""
+    monkeypatch.setenv(f"{ENV_PREFIX}COMMAND_LIFETIME_MS", "8000")
+
+    assert settings_from_environment().command_lifetime_ms == 8_000
+
+
+def test_the_default_command_lifetime_closes_inside_minecrafts_currency_window() -> None:
+    """Ivan's `GameEventPublisher.isCurrentEvent` keeps an event command-current for 15,000 ms
+    measured from event *publish*; our command is created later, at generation. Equal lengths
+    would put the tail of every event-triggered command's retry window outside that window, where
+    it is refused as a stale trigger (issue #59). The headroom is for the 4,000 ms Focused
+    provider timeout plus intake, routing and context.
+    """
+    MINECRAFT_EVENT_CURRENCY_WINDOW_MS = 15_000
+    FOCUSED_TIMEOUT_MS = Settings.model_fields["focused_timeout_ms"].default
+
+    lifetime = Settings.model_fields["command_lifetime_ms"].default
+
+    assert lifetime < MINECRAFT_EVENT_CURRENCY_WINDOW_MS
+    assert MINECRAFT_EVENT_CURRENCY_WINDOW_MS - lifetime > FOCUSED_TIMEOUT_MS

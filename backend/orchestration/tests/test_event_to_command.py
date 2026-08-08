@@ -32,7 +32,12 @@ from backend.ingestion.tests.canonical_messages import (
 from backend.orchestration.development_router import AmbientOnlyRouter
 from backend.orchestration.observations import EVENT_GENERATION_SUPPRESSED, NO_WORLD_STATE
 from backend.orchestration.tests.fake_routers import EventAwareRouter
-from backend.orchestration.tests.harness import Harness, running, settings_for
+from backend.orchestration.tests.harness import (
+    COMMAND_LIFETIME_MS,
+    Harness,
+    running,
+    settings_for,
+)
 
 BYSTANDER = "bystander-uuid"
 
@@ -557,7 +562,7 @@ async def test_a_reaction_command_retains_its_event_and_source_identities(
     assert command.npc_id == SHOPKEEPER
     assert command.tier == "focused" or command.tier == "reactive"
     assert command.dialogue
-    assert command.expires_at_ms == command.created_at_ms + 15_000
+    assert command.expires_at_ms == command.created_at_ms + COMMAND_LIFETIME_MS
 
 
 async def test_the_model_call_fact_retains_its_event_and_source_identities(

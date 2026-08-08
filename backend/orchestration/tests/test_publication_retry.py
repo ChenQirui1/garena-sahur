@@ -4,7 +4,7 @@ Owner: Jerome & Richard
 
 The cadence is asserted as the exact list of delays the publisher asked for, which a manual
 deadline records without any real time passing. Expiry is asserted against the command's own
-15-second lifetime, which those same delays advance the manual clock through.
+configured lifetime, which those same delays advance the manual clock through.
 """
 
 from __future__ import annotations
@@ -28,10 +28,14 @@ from backend.orchestration.observations import (
     COMMAND_PUBLICATION_EXPIRED,
     COMMAND_PUBLICATION_RETRIED,
 )
-from backend.orchestration.tests.harness import Harness, running, settings_for
+from backend.orchestration.tests.harness import (
+    COMMAND_LIFETIME_MS,
+    Harness,
+    running,
+    settings_for,
+)
 
 CADENCE_MS = [100, 250, 500, 1_000]
-COMMAND_LIFETIME_MS = 15_000
 
 
 @pytest_asyncio.fixture

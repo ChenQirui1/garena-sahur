@@ -17,6 +17,7 @@ from dataclasses import dataclass
 from typing import Mapping, Protocol
 
 from backend.context.trigger_kind import TriggerKind
+from backend.orchestration.behaviour_command import bounded_dialogue
 from backend.orchestration.clock import DeadlineExceeded, Deadlines
 from backend.orchestration.router_port import AttentionTier
 
@@ -138,7 +139,15 @@ class ModelGateway:
 
 
 def _normalized(behaviour: GeneratedBehaviour) -> GeneratedBehaviour:
-    dialogue = (behaviour.dialogue or "").strip() or None
+    """Every provider result converges here, which is why the consumer's bound is applied here.
+
+    An output-token budget is not the same bound: it limits what a call costs, in an estimate of
+    four characters per token, while `bounded_dialogue` limits what Minecraft will accept. A real
+    provider's 120 tokens routinely exceed 512 characters, and past that the mod drops the command
+    and the NPC simply says nothing.
+    """
+    stripped = (behaviour.dialogue or "").strip()
+    dialogue = bounded_dialogue(stripped) if stripped else None
     action = (behaviour.action or "").strip() or None
     if dialogue is None and action is None:
         raise EmptyGeneration("a command must carry dialogue or an action")

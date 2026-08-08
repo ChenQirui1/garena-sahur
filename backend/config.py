@@ -38,8 +38,20 @@ class Settings(BaseSettings):
     npc_profiles_path: Path = Path("data/npc_profiles.json")
     cached_dialogue_path: Path = Path("data/cached_dialogue.json")
 
-    # Specification #1: a command is acceptable for 15 seconds from its creation.
-    command_lifetime_ms: int = Field(default=15_000, gt=0)
+    # Specification #1 proposed 15 seconds from creation, which is also the maximum Minecraft
+    # accepts. It cannot be both. `GameEventPublisher.isCurrentEvent` keeps an event
+    # command-current for the same 15,000 ms but measures from event *publish*, while a command is
+    # created at generation — after intake, routing, queue wait and the provider call. At 15,000 ms
+    # the two windows are the same length and offset, so the tail of every event-triggered
+    # command's retry window falls outside the mod's currency window and is rejected as a stale
+    # trigger, which is exactly the restart-recovery case that window exists to serve.
+    #
+    # 10 seconds leaves 5 seconds of headroom: the 4-second Focused provider timeout plus a second
+    # for transport, intake, routing and context. Queue wait is not bounded, so this makes the
+    # window fit in the ordinary case rather than provably in every case. Jerome decided on
+    # 2026-08-08 to shorten ours rather than ask Ivan to widen his (issue #59); the cost is that
+    # fewer commands survive a restart, recorded in `orchestration/recovery.py`.
+    command_lifetime_ms: int = Field(default=10_000, gt=0)
 
     # Specification #1: Focused calls time out after four seconds and Reactive after two. The
     # provider never sees a retry, here or in its own SDK, so this budget is the whole allowance

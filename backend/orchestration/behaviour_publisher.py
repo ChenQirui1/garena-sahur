@@ -17,10 +17,11 @@ from __future__ import annotations
 import logging
 from typing import Protocol
 
-from backend.orchestration.behaviour_command import BehaviourCommand
+from backend.orchestration.behaviour_command import BehaviourCommand, PayloadTooLarge
 from backend.orchestration.clock import Clock, Deadlines
 from backend.orchestration.command_store import CommandStore, StoredCommand
 from backend.orchestration.observations import (
+    COMMAND_PAYLOAD_TOO_LARGE,
     COMMAND_PUBLICATION_EXPIRED,
     COMMAND_PUBLICATION_RETRIED,
     Observations,
@@ -58,8 +59,24 @@ class BehaviourPublisher:
         self._retry_delays_ms = retry_delays_ms
 
     async def publish(self, command: BehaviourCommand) -> bool:
-        """Commit the command, then deliver it — never the other way round."""
-        return await self.deliver(await self._commands.store(command))
+        """Commit the command, then deliver it — never the other way round.
+
+        A command too large for the consumer to read is not sent and not stored. That is the
+        backend declining to emit something unusable, not the backend rejecting a command:
+        deciding whether to *apply* one stays Minecraft's.
+        """
+        try:
+            stored = await self._commands.store(command)
+        except PayloadTooLarge as oversized:
+            self._observations.note(
+                COMMAND_PAYLOAD_TOO_LARGE,
+                session_id=command.session_id,
+                npc_id=command.npc_id,
+                command_id=command.command_id,
+                reason=str(oversized),
+            )
+            return False
+        return await self.deliver(stored)
 
     async def deliver(self, stored: StoredCommand) -> bool:
         """Send one already-committed command, retrying while it stays current.
