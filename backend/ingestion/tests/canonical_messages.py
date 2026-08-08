@@ -84,7 +84,8 @@ def conversation_turn(**overrides: Any) -> dict[str, Any]:
 
 
 def game_event(revision: int = 1, **overrides: Any) -> dict[str, Any]:
-    """Revision 1 is the §11.2 payload verbatim; later revisions vary only their delivery."""
+    """Revision 1 is `docs/message_schemas.md` §2's payload verbatim; later revisions vary
+    only their delivery."""
     return {
         "schema_version": SCHEMA_VERSION,
         "message_type": "game_event",
